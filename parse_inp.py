@@ -2,10 +2,12 @@ import os
 import numpy as np
 import argparse
 
+
 class InpParser:
     """
     Parse the Abaqus input file .inp
     """
+
     def __init__(self, inp_name):
         self.inp_name = inp_name
         self.X = list()
@@ -26,7 +28,7 @@ class InpParser:
         Return:
             vals: list of values, if fail, return None
         """
-        vals = [val.strip() for val in line.strip().split(',')]
+        vals = [val.strip() for val in line.strip().split(",")]
         if not vals[0].isnumeric():
             return None
 
@@ -34,7 +36,6 @@ class InpParser:
         if drop_index:
             vals = vals[1:]
         return vals
-
 
     def _parse_nodes(self, fh, X):
         """
@@ -89,8 +90,8 @@ class InpParser:
 
         # Get element numbering and nodal indices
         for line in fh:
-            # Note that offset = -1 because Abaqus uses 1-based indexing, while 0-based
-            # indexing is what we want
+            # Note that offset = -1 because Abaqus uses 1-based indexing, while
+            # 0-based indexing is what we want
             _conn = self._line_to_list(line, dtype=int, drop_index=True, offset=-1)
 
             # Break when data chunk ends
@@ -105,21 +106,21 @@ class InpParser:
         """
         Parse the inp file.
         """
-        print(f'Parsing {self.inp_name} ...', end='')
+        print(f"Parsing {self.inp_name} ...", end="")
 
         # Load data from inp
         with open(self.inp_name) as fh:
             # Move to node section
             for line in fh:
-                if line.strip() == '*Node':
+                if line.strip() == "*Node":
                     break
 
             # Get nodes
             self._parse_nodes(fh, self.X)
 
             # Get element connectivity
-            self._parse_elems(fh, 'C3D8R', self.conn)
-            self._parse_elems(fh, 'C3D10', self.conn)
+            self._parse_elems(fh, "C3D8R", self.conn)
+            self._parse_elems(fh, "C3D10", self.conn)
 
         # Convert to numpy array
         self.X = np.array(self.X)
@@ -129,7 +130,7 @@ class InpParser:
         self.nnodes = self.X.shape[0]
         self.nelems = np.sum([len(v) for k, v in self.conn.items()])
 
-        print('done')
+        print("done")
         return
 
     def to_vtk(self, vtk_name=None):
@@ -137,51 +138,54 @@ class InpParser:
         Generate a vtk from inp.
         """
         if vtk_name is None:
-            vtk_name = '{:s}.vtk'.format(os.path.splitext(self.inp_name)[0])
+            vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
 
-        print(f'Converting {self.inp_name} to {vtk_name} ...', end='')
+        print(f"Converting {self.inp_name} to {vtk_name} ...", end="")
 
         # Create a empty vtk file and write headers
-        with open(vtk_name, 'w') as fh:
-            fh.write('# vtk DataFile Version 3.0\n')
-            fh.write('my example\n')
-            fh.write('ASCII\n')
-            fh.write('DATASET UNSTRUCTURED_GRID\n')
+        with open(vtk_name, "w") as fh:
+            fh.write("# vtk DataFile Version 3.0\n")
+            fh.write("my example\n")
+            fh.write("ASCII\n")
+            fh.write("DATASET UNSTRUCTURED_GRID\n")
 
             # Write nodal points
-            fh.write('POINTS {:d} double\n'.format(self.nnodes))
+            fh.write("POINTS {:d} double\n".format(self.nnodes))
             for x in self.X:
-                row = f'{x}'[1:-1]
-                fh.write(f'{row}\n')
+                row = f"{x}"[1:-1]
+                fh.write(f"{row}\n")
 
-            einfo = {'C3D8R': {'nnode': 8, 'vtk_type': 12},
-                     'C3D10': {'nnode':10, 'vtk_type': 24}}
+            einfo = {
+                "C3D8R": {"nnode": 8, "vtk_type": 12},
+                "C3D10": {"nnode": 10, "vtk_type": 24},
+            }
 
             # Write connectivity
             N = self.nelems
-            size = np.sum([len(v)*(1 + einfo[k]['nnode'])
-                for k, v in self.conn.items()])
-            fh.write(f'CELLS {N} {size}\n')
+            size = np.sum(
+                [len(v) * (1 + einfo[k]["nnode"]) for k, v in self.conn.items()]
+            )
+            fh.write(f"CELLS {N} {size}\n")
             for etype, conn in self.conn.items():
                 for c in conn:
-                    node_idx = f'{c}'[1:-1]  # remove square bracket [ and ]
-                    npts = einfo[etype]['nnode']
-                    fh.write(f'{npts} {node_idx}\n')
+                    node_idx = f"{c}"[1:-1]  # remove square bracket [ and ]
+                    npts = einfo[etype]["nnode"]
+                    fh.write(f"{npts} {node_idx}\n")
 
             # Write cell type
-            fh.write(f'CELL_TYPES {self.nelems}\n')
+            fh.write(f"CELL_TYPES {self.nelems}\n")
             for etype, conn in self.conn.items():
                 for c in conn:
-                    vtk_type = einfo[etype]['vtk_type']
-                    fh.write(f'{vtk_type}\n')
+                    vtk_type = einfo[etype]["vtk_type"]
+                    fh.write(f"{vtk_type}\n")
 
-        print('done')
+        print("done")
         return
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     p = argparse.ArgumentParser()
-    p.add_argument('inp', type=str, metavar='[inp file]')
+    p.add_argument("inp", type=str, metavar="[inp file]")
     args = p.parse_args()
     inp_parser = InpParser(args.inp)
     inp_parser.parse_inp()
