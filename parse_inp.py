@@ -89,7 +89,7 @@ class InpParser:
 
         # Get element numbering and nodal indices
         for line in fh:
-            # Note that offset = 1 because Abaqus uses 1-based indexing, while 0-based
+            # Note that offset = -1 because Abaqus uses 1-based indexing, while 0-based
             # indexing is what we want
             _conn = self._line_to_list(line, dtype=int, drop_index=True, offset=-1)
 
@@ -105,6 +105,8 @@ class InpParser:
         """
         Parse the inp file.
         """
+        print(f'Parsing {self.inp_name} ...', end='')
+
         # Load data from inp
         with open(self.inp_name) as fh:
             # Move to node section
@@ -127,6 +129,7 @@ class InpParser:
         self.nnodes = self.X.shape[0]
         self.nelems = np.sum([len(v) for k, v in self.conn.items()])
 
+        print('done')
         return
 
     def to_vtk(self, vtk_name=None):
@@ -136,7 +139,7 @@ class InpParser:
         if vtk_name is None:
             vtk_name = '{:s}.vtk'.format(os.path.splitext(self.inp_name)[0])
 
-        print(f'Converting {self.inp_name} to {vtk_name}...', end='')
+        print(f'Converting {self.inp_name} to {vtk_name} ...', end='')
 
         # Create a empty vtk file and write headers
         with open(vtk_name, 'w') as fh:
@@ -147,12 +150,12 @@ class InpParser:
 
             # Write nodal points
             fh.write('POINTS {:d} double\n'.format(self.nnodes))
-            for i in range(self.nnodes):
-                fh.write('{:f} {:f} {:f}\n'.format(self.X[i, 0], self.X[i, 1],
-                    self.X[i, 2]))
+            for x in self.X:
+                row = f'{x}'[1:-1]
+                fh.write(f'{row}\n')
 
             einfo = {'C3D8R': {'nnode': 8, 'vtk_type': 12},
-                            'C3D10': {'nnode':10, 'vtk_type': 24}}
+                     'C3D10': {'nnode':10, 'vtk_type': 24}}
 
             # Write connectivity
             N = self.nelems
@@ -161,8 +164,7 @@ class InpParser:
             fh.write(f'CELLS {N} {size}\n')
             for etype, conn in self.conn.items():
                 for c in conn:
-                    node_idx = f'{c}'
-                    node_idx = node_idx[1:-1]  # remove square bracket [ and ]
+                    node_idx = f'{c}'[1:-1]  # remove square bracket [ and ]
                     npts = einfo[etype]['nnode']
                     fh.write(f'{npts} {node_idx}\n')
 
