@@ -1,8 +1,23 @@
 import numpy as np
 from scipy import sparse
-from scipy.sparse.linalg import spsolve
+from scipy.sparse.linalg import spsolve, gmres
 import matplotlib.pylab as plt
 import matplotlib.tri as tri
+import argparse
+from timeit import default_timer
+import pyamg
+
+
+def time_this(func):
+    def wrapper(*args, **kwargs):
+        t0 = default_timer()
+        ret = func(*args, **kwargs)
+        t1 = default_timer()
+        print('[timer] function {:s} returns, exec time: {:.2f} s'.format(
+            func.__name__, t1 - t0))
+        return ret
+    return wrapper
+
 
 class Poisson:
     def __init__(self, conn, x, bcs, gfunc):
@@ -28,6 +43,12 @@ class Poisson:
         # Convert the lists into numpy arrays
         self.i = np.array(i, dtype=int)
         self.j = np.array(j, dtype=int)
+
+        # Print info
+        print(f'number of elements: {self.nelems}')
+        print(f'number of nodes:    {self.nnodes}')
+        print(f'number of states:   {self.nvars}')
+        return
 
     def _compute_reduced_variables(self, nvars, bcs):
         """
@@ -83,9 +104,23 @@ class Poisson:
 
         # Compute the x and y coordinates of each element
         xe = self.x[self.conn, 0]
-        ye = self.x[self.conn, 1]
+        ye = self.x[self.conn, 1]  # TODO: element_scatter(X, Xe)
 
         fe = np.zeros(self.conn.shape)
+
+        # TODO:
+        # compute_jtrans(quadrature, basis, Xe, Jq)  # Jq: nelems * nquads * 3 * 3
+        # basis returns N, Nxi, Neta
+
+        # TODO:
+        # compute_elem_mapping(Xe, Xq)
+        # gq = gfunc(Xq)
+
+        # TODO:
+        # for n in range(quadrature.num_quad_pts):
+        #       quad_pt = quadrature.pts[n]   # 2 or 3 dim vec
+        #       quad_w = quadrature.weights[n]  # scalar
+        #       fe += quad_w * detJ * gq * N  # fe: nelems * nnodes_per_elem * vars_per_node
 
         for j in range(2):
             for i in range(2):
@@ -98,13 +133,18 @@ class Poisson:
                 yvals = np.dot(ye, N)
                 gvals = gfunc(xvals, yvals)
 
-                fe += np.outer(detJ * gvals, N)
+                fe += np.outer(detJ * gvals, N)  # nelems * nnodes_per_elem
+
+        # TODO:
+        # assemble_residual(fe, forces)
 
         for i in range(4):
             np.add.at(forces, self.conn[:, i], fe[:, i])
 
         return forces
 
+    @time_this
+    # TODO: compute_jacobian():
     def assemble_jacobian(self):
         """
         Assemble the Jacobian matrix
@@ -143,11 +183,13 @@ class Poisson:
                 # This is a fancy (and fast) way to compute the element matrices
                 Ke += np.einsum('n,nij,nil -> njl', detJ, Be, Be)
 
+        # TODO: assemble_jacobian(Ke, K)
         K = sparse.coo_matrix((Ke.flatten(), (self.i, self.j)))
         K = K.tocsr()
 
         return K
 
+    @time_this
     def eval_ks(self, pval, u):
 
         # Compute the offset
@@ -184,6 +226,7 @@ class Poisson:
 
         return offset + np.log(expsum)/pval
 
+    @time_this
     def eval_ks_adjoint_rhs(self, pval, u):
 
         # Compute the offset
@@ -239,12 +282,14 @@ class Poisson:
 
         return rhs
 
+    @time_this
     def reduce_vector(self, forces):
         """
         Eliminate essential boundary conditions from the vector
         """
         return forces[self.reduced]
 
+    @time_this
     def reduce_matrix(self, matrix):
         """
         Eliminate essential boundary conditions from the matrix
@@ -252,29 +297,42 @@ class Poisson:
         temp = matrix[self.reduced, :]
         return temp[:, self.reduced]
 
-    def solve(self):
+    @time_this
+    def solve(self, method='direct', use_amg=False):
         """
         Perform a linear static analysis
+        Args:
+            method: direct or GMRES
         """
 
         K = self.assemble_jacobian()
         Kr = self.reduce_matrix(K)
         fr = self.reduce_vector(self.g)
 
-        ur = sparse.linalg.spsolve(Kr, fr)
+        if method == 'direct':
+            ur = spsolve(Kr, fr)
+        else:
+            M = None
+            if use_amg:
+                ml = pyamg.smoothed_aggregation_solver(Kr)
+                M = ml.aspreconditioner()
+            ur, fail = gmres(Kr, fr, M=M)
+            if fail:
+                raise RuntimeError(f'GMRES failed with code {fail}')
 
         u = np.zeros(self.nvars)
         u[self.reduced] = ur
 
         return u
 
+    @time_this
     def solve_adjoint(self, pval):
 
         K = self.assemble_jacobian()
         Kr = self.reduce_matrix(K)
         fr = self.reduce_vector(self.g)
 
-        ur = sparse.linalg.spsolve(Kr, fr)
+        ur = spsolve(Kr, fr)
 
         u = np.zeros(self.nvars)
         u[self.reduced] = ur
@@ -320,54 +378,63 @@ class Poisson:
 
         return
 
-m = 200
-n = 50
-nelems = m*n
-nnodes = (m + 1)*(n + 1)
-y = np.linspace(0, 4, n + 1)
-x = np.linspace(0, 10, m + 1)
-nodes = np.arange(0, (n + 1)*(m + 1)).reshape((n + 1, m + 1))
-
-# Set the node locations
-X = np.zeros((nnodes, 2))
-for j in range(n + 1):
-    for i in range(m + 1):
-        X[i + j*(m + 1), 0] = x[i]
-        X[i + j*(m + 1), 1] = y[j]
-
-# Set the connectivity
-conn = np.zeros((nelems, 4), dtype=int)
-for j in range(n):
-    for i in range(m):
-        conn[i + j*m, 0] = nodes[j, i]
-        conn[i + j*m, 1] = nodes[j, i + 1]
-        conn[i + j*m, 2] = nodes[j + 1, i + 1]
-        conn[i + j*m, 3] = nodes[j + 1, i]
-
-# Set the constrained degrees of freedom at each node
-bcs = []
-for j in range(n):
-    bcs.append(nodes[j, 0])
-    bcs.append(nodes[j, -1])
 
 def gfunc(xvals, yvals):
     return xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
 
-# Create the Poisson problem
-poisson = Poisson(conn, X, bcs, gfunc)
 
-# Solve for the displacements
-u = poisson.solve()
+@time_this
+def main():
+    p = argparse.ArgumentParser()
+    p.add_argument('--n', default=50, type=int)
+    p.add_argument('--method', default='direct', choices=['direct', 'gmres'])
+    args = p.parse_args()
 
-# Plot the u and the v displacements
-fig, ax = plt.subplots(figsize=(8, 4))
-poisson.plot(u, ax=ax, levels=20)
-ax.set_title('u')
+    n = args.n
+    m = n * 4
+    nelems = m*n
+    nnodes = (m + 1)*(n + 1)
+    y = np.linspace(0, 4, n + 1)
+    x = np.linspace(0, 10, m + 1)
+    nodes = np.arange(0, (n + 1)*(m + 1)).reshape((n + 1, m + 1))
 
-fig, ax = plt.subplots(4, 1, figsize=(8, 15))
-for index, pval in enumerate([1, 10, 100, 500]):
-    psi = poisson.solve_adjoint(pval)
-    poisson.plot(psi, ax=ax[index], levels=20)
-    ax[index].set_title(r'$\psi$ with p = %g'%(pval))
+    # Set the node locations
+    X = np.zeros((nnodes, 2))
+    for j in range(n + 1):
+        for i in range(m + 1):
+            X[i + j*(m + 1), 0] = x[i]
+            X[i + j*(m + 1), 1] = y[j]
 
-plt.show()
+    # Set the connectivity
+    conn = np.zeros((nelems, 4), dtype=int)
+    for j in range(n):
+        for i in range(m):
+            conn[i + j*m, 0] = nodes[j, i]
+            conn[i + j*m, 1] = nodes[j, i + 1]
+            conn[i + j*m, 2] = nodes[j + 1, i + 1]
+            conn[i + j*m, 3] = nodes[j + 1, i]
+
+    # Set the constrained degrees of freedom at each node
+    bcs = []
+    for j in range(n):
+        bcs.append(nodes[j, 0])
+        bcs.append(nodes[j, -1])
+
+    # Create the Poisson problem
+    poisson = Poisson(conn, X, bcs, gfunc)
+
+    # Solve for the displacements
+    u = poisson.solve(method=args.method, use_amg=False)
+    psi = poisson.solve_adjoint(pval=10)
+
+    # Plot the u and the v displacements
+    fig, axs = plt.subplots(ncols=1, nrows=2)
+    poisson.plot(u, ax=axs[0], levels=20)
+    axs[0].set_title('u')
+    poisson.plot(psi, ax=axs[1], levels=20)
+    axs[1].set_title('$\psi$')
+    plt.show()
+
+
+if __name__ == '__main__':
+    main()
