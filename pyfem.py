@@ -323,8 +323,8 @@ class Assembler:
         self.nquads = self.quadrature.get_nquads()
         self.nvars_per_node = self.model.get_nvars_per_node()
 
-        # Compute non-zero indices
-        self.i, self.j = self._compute_nz_pattern_2()
+        # Compute indices for non-zero entries
+        self.nz_i, self.nz_j = self._compute_nz_pattern()
 
         # Allocate memory for the element-wise data
         self.Xe = np.zeros(
@@ -372,18 +372,19 @@ class Assembler:
 
         return
 
-    @time_this
-    def _count_node_duplicate(self):
-        """
-        Count number of duplicates for each node
-        """
-        _, counts = np.unique(self.conn, return_counts=True)
-        return counts
+    # @time_this
+    # def _count_node_duplicate(self):
+    #     """
+    #     Count number of duplicates for each node
+    #     """
+    #     _, counts = np.unique(self.conn, return_counts=True)
+    #     return counts
 
     @time_this
-    def _compute_nz_pattern(self):
+    def __compute_nz_pattern(self):
         """
-        Compute the non-zero coordinates
+        Compute the non-zero coordinates  (slow implementation, use next one
+        instead)
         """
         # Compute non-zero pattern (i, j)
         i = []
@@ -396,20 +397,23 @@ class Assembler:
         return np.array(i, dtype=int), np.array(j, dtype=int)
 
     @time_this
-    def _compute_nz_pattern_2(self):
+    def _compute_nz_pattern(self):
         """
-        Compute the non-zero coordinates in a faster way
+        Compute indices for non-zero entries in the global stiffness matrix
+
+        Return:
+            nz_i: i-coordinates
+            nz_j: j-coordinates
         """
-        # Compute non-zero pattern (i, j)
         elem_to_mat_i = [
             i for i in range(self.nnodes_per_elem) for j in range(self.nnodes_per_elem)
         ]
         elem_to_mat_j = [
             j for i in range(self.nnodes_per_elem) for j in range(self.nnodes_per_elem)
         ]
-        i = self.conn[:, elem_to_mat_i].flatten()
-        j = self.conn[:, elem_to_mat_j].flatten()
-        return i, j
+        nz_i = self.conn[:, elem_to_mat_i].flatten()
+        nz_j = self.conn[:, elem_to_mat_j].flatten()
+        return nz_i, nz_j
 
     @time_this
     def _scatter_node_to_elem(self, data, data_e):
@@ -522,7 +526,7 @@ class Assembler:
         """
         Assemble global K matrix
         """
-        K = sparse.coo_matrix((Ke.flatten(), (self.i, self.j)))
+        K = sparse.coo_matrix((Ke.flatten(), (self.nz_i, self.nz_j)))
         return K.tocsr()
 
     @time_this
