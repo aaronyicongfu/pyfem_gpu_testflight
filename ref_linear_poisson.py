@@ -13,8 +13,8 @@ def time_this(func):
         t0 = default_timer()
         ret = func(*args, **kwargs)
         t1 = default_timer()
-        print('[timer] function {:s} returns, exec time: {:.2f} s'.format(
-            func.__name__, t1 - t0))
+        # print('[timer] function {:s} returns, exec time: {:.2f} s'.format(
+        #     func.__name__, t1 - t0))
         return ret
     return wrapper
 
