@@ -2,6 +2,7 @@ import numpy as np
 from scipy import sparse
 from time import perf_counter_ns
 from abc import ABC, abstractmethod
+import matplotlib.pyplot as plt
 import argparse
 
 
@@ -10,16 +11,18 @@ def time_this(func):
     Decorator: time the execution of a function
     """
     tab = "    "
+    time_this.counter = 0  # a "static" variable
+    fun_name = func.__qualname__
 
     def wrapper(*args, **kwargs):
-        print(f"[timer] {tab*time_this.counter}{func.__name__:s}() called")
+        print(f"[timer] {tab*time_this.counter}{fun_name}() called")
         time_this.counter += 1
         t0 = perf_counter_ns()
         ret = func(*args, **kwargs)
         t1 = perf_counter_ns()
         time_this.counter -= 1
         print(
-            f"[timer] {tab*time_this.counter}{func.__name__:s}() return",
+            f"[timer] {tab*time_this.counter}{fun_name}() return",
             f"({(t1 - t0) / 1e6:.2f} ms)",
         )
         return ret
@@ -27,20 +30,19 @@ def time_this(func):
     return wrapper
 
 
-time_this.counter = 0
-
-
 class QuadratureBase(ABC):
     """
     Abstract class for quadrature object
     """
 
+    @time_this
     def __init__(self, pts, weights):
         self.pts = pts
         self.weights = weights
         self.nquads = pts.shape[0]
         return
 
+    @time_this
     def get_nquads(self):
         """
         Get number of quadrature points per element
@@ -76,6 +78,7 @@ class BasisBase(ABC):
     Abstract class for the element basis function
     """
 
+    @time_this
     def __init__(self, quadrature):
         """
         Inputs:
@@ -113,10 +116,12 @@ class PhysicalModelBase(ABC):
     TODO: how to generalize this class?
     """
 
+    @time_this
     def __init__(self, nvars_per_node):
         self.nvars_per_node = nvars_per_node
         return
 
+    @time_this
     def get_nvars_per_node(self):
         return self.nvars_per_node
 
@@ -130,6 +135,7 @@ class PhysicalModelBase(ABC):
 
 
 class QuadratureBilinear2D(QuadratureBase):
+    @time_this
     def __init__(self):
         pts = np.array(
             [
@@ -144,18 +150,22 @@ class QuadratureBilinear2D(QuadratureBase):
         super().__init__(pts, weights)
         return
 
+    @time_this
     def get_pt(self, idx=None):
         return super().get_pt(idx)
 
+    @time_this
     def get_weight(self, idx=None):
         return super().get_weight(idx)
 
 
 class BasisBilinear2D(BasisBase):
+    @time_this
     def __init__(self, quadrature):
         super().__init__(quadrature)
         return
 
+    @time_this
     def eval_shape_fun(self, N):
         quad_pts = self.quadrature.get_pt()
         N[...] = np.array(
@@ -173,6 +183,7 @@ class BasisBilinear2D(BasisBase):
         )
         return
 
+    @time_this
     def eval_shape_fun_deriv(self, Nderiv):
         quad_pts = self.quadrature.get_pt()
         Nderiv[..., 0] = np.array(
@@ -217,21 +228,24 @@ class LinearPoisson2D(PhysicalModelBase):
     u = u0 on ∂Ω
 
     Weak form:
-    ∫ ∇u ∇v dΩ = ∫gv dΩ for test function
+    ∫ ∇u ∇v dΩ = ∫gv dΩ for test function v
     """
 
+    @time_this
     def __init__(self):
         self.fun_vals = None
         nvars_per_node = 1
         super().__init__(nvars_per_node)
         return
 
+    @time_this
     def _eval_gfun(self, Xq, fun_vals):
         xvals = Xq[..., 0]
         yvals = Xq[..., 1]
         fun_vals[...] = xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
         return
 
+    @time_this
     def eval_element_rhs(self, quadrature, N, detJq, Xq, rhs_e):
         """
         Evaluate element-wise rhs vectors:
@@ -261,6 +275,7 @@ class LinearPoisson2D(PhysicalModelBase):
         rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", detJq, wq, N, self.fun_vals)
         return
 
+    @time_this
     def eval_element_jacobian(self, quadrature, Ngrad, detJq, Ke):
         """
         Evaluate element-wise Jacobian matrices
@@ -284,6 +299,7 @@ class LinearPoisson2D(PhysicalModelBase):
 
 
 class Assembler:
+    @time_this
     def __init__(
         self,
         conn,
@@ -302,12 +318,13 @@ class Assembler:
         # Get dimension information
         self.nelems = conn.shape[0]
         self.nnodes_per_elem = conn.shape[1]
+        self.nnodes = X.shape[0]
         self.ndims = X.shape[1]
         self.nquads = self.quadrature.get_nquads()
         self.nvars_per_node = self.model.get_nvars_per_node()
 
         # Compute non-zero indices
-        self.i, self.j = self._compute_nz_pattern()
+        self.i, self.j = self._compute_nz_pattern_2()
 
         # Allocate memory for the element-wise data
         self.Xe = np.zeros(
@@ -347,12 +364,21 @@ class Assembler:
         )  # shape function derivatives w.r.t. local coordinates
         self.Ngrad = np.zeros(
             (self.nelems, self.nquads, self.nnodes_per_elem, self.ndims)
-        )  # shape gradient w.r.t. global coordinates
+        )  # gradient of basis w.r.t. global coordinates
 
         # Global Jacobian (stiffness) matrix and rhs to be created
         self.rhs = None
         self.K = None
+
         return
+
+    @time_this
+    def _count_node_duplicate(self):
+        """
+        Count number of duplicates for each node
+        """
+        _, counts = np.unique(self.conn, return_counts=True)
+        return counts
 
     @time_this
     def _compute_nz_pattern(self):
@@ -362,13 +388,27 @@ class Assembler:
         # Compute non-zero pattern (i, j)
         i = []
         j = []
-        val = []
         for index in range(self.nelems):
             for ii in self.conn[index, :]:
                 for jj in self.conn[index, :]:
                     i.append(ii)
                     j.append(jj)
-                    val.append(0)
+        return np.array(i, dtype=int), np.array(j, dtype=int)
+
+    @time_this
+    def _compute_nz_pattern_2(self):
+        """
+        Compute the non-zero coordinates in a faster way
+        """
+        # Compute non-zero pattern (i, j)
+        elem_to_mat_i = [
+            i for i in range(self.nnodes_per_elem) for j in range(self.nnodes_per_elem)
+        ]
+        elem_to_mat_j = [
+            j for i in range(self.nnodes_per_elem) for j in range(self.nnodes_per_elem)
+        ]
+        i = self.conn[:, elem_to_mat_i].flatten()
+        j = self.conn[:, elem_to_mat_j].flatten()
         return i, j
 
     @time_this
@@ -546,12 +586,12 @@ class Assembler:
         return self._assemble_jacobian(self.Ke)
 
 
-def create_problem(n=3):
-    m = n * 4
+@time_this
+def create_problem(m, n):
     nelems = m * n
     nnodes = (m + 1) * (n + 1)
-    y = np.linspace(0, 4, n + 1)
-    x = np.linspace(0, 10, m + 1)
+    x = np.linspace(0, m / n, m + 1)
+    y = np.linspace(0, 1, n + 1)
     nodes = np.arange(0, (n + 1) * (m + 1)).reshape((n + 1, m + 1))
 
     # Set the node locations
@@ -583,11 +623,15 @@ def create_problem(n=3):
 def main():
     p = argparse.ArgumentParser()
 
-    p.add_argument("--n", type=int, default=100)
+    p.add_argument("--m", type=int, default=3)
+    p.add_argument("--n", type=int, default=2)
     args = p.parse_args()
 
+    m = args.m
+    n = args.n
+
     # Create mesh
-    nelems, nnodes, conn, X, bcs = create_problem(n=args.n)
+    nelems, nnodes, conn, X, bcs = create_problem(m, n)
 
     # Old code
     from ref_linear_poisson import Poisson, gfunc
@@ -605,15 +649,17 @@ def main():
     rhs = np.zeros(nnodes)
     assembler.compute_rhs(rhs)
     print("Check global rhs:")
-    print(np.max(rhs_old))
-    print(np.max(rhs_old - rhs))
+    print("max(rhs):", np.max(rhs_old))
+    print("max err: ", np.max(rhs_old - rhs))
 
     # Check K
     K_old = poisson.assemble_jacobian()
     K = assembler.compute_jacobian()
+    Ke = assembler.Ke
+    nnz = K.count_nonzero()
     print("Check global K:")
-    print(np.max(K_old))
-    print(np.max(K_old - K))
+    print("max(K):  ", np.max(K_old))
+    print("max(err):", np.max(K_old - K))
 
 
 if __name__ == "__main__":
