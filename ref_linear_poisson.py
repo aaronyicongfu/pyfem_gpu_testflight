@@ -16,6 +16,7 @@ def time_this(func):
         # print('[timer] function {:s} returns, exec time: {:.2f} s'.format(
         #     func.__name__, t1 - t0))
         return ret
+
     return wrapper
 
 
@@ -45,9 +46,9 @@ class Poisson:
         self.j = np.array(j, dtype=int)
 
         # Print info
-        print(f'number of elements: {self.nelems}')
-        print(f'number of nodes:    {self.nnodes}')
-        print(f'number of states:   {self.nvars}')
+        print(f"number of elements: {self.nelems}")
+        print(f"number of nodes:    {self.nnodes}")
+        print(f"number of states:   {self.nvars}")
         return
 
     def _compute_reduced_variables(self, nvars, bcs):
@@ -65,12 +66,16 @@ class Poisson:
         Evaluate the basis functions and Jacobian of the transformation
         """
 
-        N = 0.25*np.array([(1.0 - xi)*(1.0 - eta),
-                            (1.0 + xi)*(1.0 - eta),
-                            (1.0 + xi)*(1.0 + eta),
-                            (1.0 - xi)*(1.0 + eta)])
-        Nxi = 0.25*np.array([-(1.0 - eta), (1.0 - eta), (1.0 + eta), -(1.0 + eta)])
-        Neta = 0.25*np.array([-(1.0 - xi), -(1.0 + xi), (1.0 + xi), (1.0 - xi)])
+        N = 0.25 * np.array(
+            [
+                (1.0 - xi) * (1.0 - eta),
+                (1.0 + xi) * (1.0 - eta),
+                (1.0 + xi) * (1.0 + eta),
+                (1.0 - xi) * (1.0 + eta),
+            ]
+        )
+        Nxi = 0.25 * np.array([-(1.0 - eta), (1.0 - eta), (1.0 + eta), -(1.0 + eta)])
+        Neta = 0.25 * np.array([-(1.0 - xi), -(1.0 + xi), (1.0 + xi), (1.0 - xi)])
 
         # Compute the Jacobian transformation at each quadrature points
         J[:, 0, 0] = np.dot(xe, Nxi)
@@ -79,13 +84,13 @@ class Poisson:
         J[:, 1, 1] = np.dot(ye, Neta)
 
         # Compute the inverse of the Jacobian
-        detJ[:] = J[:, 0, 0]*J[:, 1, 1] - J[:, 0, 1]*J[:, 1, 0]
+        detJ[:] = J[:, 0, 0] * J[:, 1, 1] - J[:, 0, 1] * J[:, 1, 0]
 
         if invJ is not None:
-            invJ[:, 0, 0] = J[:, 1, 1]/detJ
-            invJ[:, 0, 1] = -J[:, 0, 1]/detJ
-            invJ[:, 1, 0] = -J[:, 1, 0]/detJ
-            invJ[:, 1, 1] = J[:, 0, 0]/detJ
+            invJ[:, 0, 0] = J[:, 1, 1] / detJ
+            invJ[:, 0, 1] = -J[:, 0, 1] / detJ
+            invJ[:, 1, 0] = -J[:, 1, 0] / detJ
+            invJ[:, 1, 1] = J[:, 0, 0] / detJ
 
         return N, Nxi, Neta
 
@@ -97,7 +102,7 @@ class Poisson:
         forces = np.zeros(self.nnodes)
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         J = np.zeros((self.nelems, 2, 2))
         detJ = np.zeros(self.nelems)
@@ -151,7 +156,7 @@ class Poisson:
         """
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # Assemble all of the the 4 x 4 element stiffness matrix
         Ke = np.zeros((self.nelems, 4, 4))
@@ -169,7 +174,9 @@ class Poisson:
             for i in range(2):
                 xi = gauss_pts[i]
                 eta = gauss_pts[j]
-                N, Nxi, Neta = self._eval_basis_and_jacobian(xi, eta, xe, ye, J, detJ, invJ)
+                N, Nxi, Neta = self._eval_basis_and_jacobian(
+                    xi, eta, xe, ye, J, detJ, invJ
+                )
 
                 # Compute the derivative of the shape functions w.r.t. xi and eta
                 # [Nx, Ny] = [Nxi, Neta]*invJ
@@ -181,7 +188,7 @@ class Poisson:
                 Be[:, 1, :] = Ny
 
                 # This is a fancy (and fast) way to compute the element matrices
-                Ke += np.einsum('n,nij,nil -> njl', detJ, Be, Be)
+                Ke += np.einsum("n,nij,nil -> njl", detJ, Be, Be)
 
         # TODO: assemble_jacobian(Ke, K)
         K = sparse.coo_matrix((Ke.flatten(), (self.i, self.j)))
@@ -196,7 +203,7 @@ class Poisson:
         offset = np.max(u)
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # Assemble all of the the 4 x 4 element stiffness matrix
         Ke = np.zeros((self.nelems, 4, 4))
@@ -222,9 +229,9 @@ class Poisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                expsum += np.sum(detJ * np.exp(pval*(uvals - offset)))
+                expsum += np.sum(detJ * np.exp(pval * (uvals - offset)))
 
-        return offset + np.log(expsum)/pval
+        return offset + np.log(expsum) / pval
 
     @time_this
     def eval_ks_adjoint_rhs(self, pval, u):
@@ -233,7 +240,7 @@ class Poisson:
         offset = np.max(u)
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # Assemble all of the the 4 x 4 element stiffness matrix
         Ke = np.zeros((self.nelems, 4, 4))
@@ -259,7 +266,7 @@ class Poisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                expsum += np.sum(detJ * np.exp(pval*(uvals - offset)))
+                expsum += np.sum(detJ * np.exp(pval * (uvals - offset)))
 
         # Store the element-wise right-hand-side
         erhs = np.zeros(self.conn.shape)
@@ -273,7 +280,7 @@ class Poisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                erhs += np.outer(detJ * np.exp(pval*(uvals - offset))/expsum, N)
+                erhs += np.outer(detJ * np.exp(pval * (uvals - offset)) / expsum, N)
 
         # Convert to the right-hand-side
         rhs = np.zeros(self.nnodes)
@@ -298,7 +305,7 @@ class Poisson:
         return temp[:, self.reduced]
 
     @time_this
-    def solve(self, method='direct', use_amg=False):
+    def solve(self, method="direct", use_amg=False):
         """
         Perform a linear static analysis
         Args:
@@ -309,7 +316,7 @@ class Poisson:
         Kr = self.reduce_matrix(K)
         fr = self.reduce_vector(self.g)
 
-        if method == 'direct':
+        if method == "direct":
             ur = spsolve(Kr, fr)
         else:
             M = None
@@ -318,7 +325,7 @@ class Poisson:
                 M = ml.aspreconditioner()
             ur, fail = gmres(Kr, fr, M=M)
             if fail:
-                raise RuntimeError(f'GMRES failed with code {fail}')
+                raise RuntimeError(f"GMRES failed with code {fail}")
 
         u = np.zeros(self.nvars)
         u[self.reduced] = ur
@@ -355,23 +362,23 @@ class Poisson:
         """
 
         # Create the triangles
-        triangles = np.zeros((2*self.nelems, 3), dtype=int)
-        triangles[:self.nelems, 0] = self.conn[:, 0]
-        triangles[:self.nelems, 1] = self.conn[:, 1]
-        triangles[:self.nelems, 2] = self.conn[:, 2]
+        triangles = np.zeros((2 * self.nelems, 3), dtype=int)
+        triangles[: self.nelems, 0] = self.conn[:, 0]
+        triangles[: self.nelems, 1] = self.conn[:, 1]
+        triangles[: self.nelems, 2] = self.conn[:, 2]
 
-        triangles[self.nelems:, 0] = self.conn[:, 0]
-        triangles[self.nelems:, 1] = self.conn[:, 2]
-        triangles[self.nelems:, 2] = self.conn[:, 3]
+        triangles[self.nelems :, 0] = self.conn[:, 0]
+        triangles[self.nelems :, 1] = self.conn[:, 2]
+        triangles[self.nelems :, 2] = self.conn[:, 3]
 
         # Create the triangulation object
-        tri_obj = tri.Triangulation(self.x[:,0], self.x[:,1], triangles)
+        tri_obj = tri.Triangulation(self.x[:, 0], self.x[:, 1], triangles)
 
         if ax is None:
             fig, ax = plt.subplots()
 
         # Set the aspect ratio equal
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         # Create the contour plot
         ax.tricontourf(tri_obj, u, **kwargs)
@@ -386,33 +393,33 @@ def gfunc(xvals, yvals):
 @time_this
 def main():
     p = argparse.ArgumentParser()
-    p.add_argument('--n', default=50, type=int)
-    p.add_argument('--method', default='direct', choices=['direct', 'gmres'])
+    p.add_argument("--n", default=50, type=int)
+    p.add_argument("--method", default="direct", choices=["direct", "gmres"])
     args = p.parse_args()
 
     n = args.n
     m = n * 4
-    nelems = m*n
-    nnodes = (m + 1)*(n + 1)
+    nelems = m * n
+    nnodes = (m + 1) * (n + 1)
     y = np.linspace(0, 4, n + 1)
     x = np.linspace(0, 10, m + 1)
-    nodes = np.arange(0, (n + 1)*(m + 1)).reshape((n + 1, m + 1))
+    nodes = np.arange(0, (n + 1) * (m + 1)).reshape((n + 1, m + 1))
 
     # Set the node locations
     X = np.zeros((nnodes, 2))
     for j in range(n + 1):
         for i in range(m + 1):
-            X[i + j*(m + 1), 0] = x[i]
-            X[i + j*(m + 1), 1] = y[j]
+            X[i + j * (m + 1), 0] = x[i]
+            X[i + j * (m + 1), 1] = y[j]
 
     # Set the connectivity
     conn = np.zeros((nelems, 4), dtype=int)
     for j in range(n):
         for i in range(m):
-            conn[i + j*m, 0] = nodes[j, i]
-            conn[i + j*m, 1] = nodes[j, i + 1]
-            conn[i + j*m, 2] = nodes[j + 1, i + 1]
-            conn[i + j*m, 3] = nodes[j + 1, i]
+            conn[i + j * m, 0] = nodes[j, i]
+            conn[i + j * m, 1] = nodes[j, i + 1]
+            conn[i + j * m, 2] = nodes[j + 1, i + 1]
+            conn[i + j * m, 3] = nodes[j + 1, i]
 
     # Set the constrained degrees of freedom at each node
     bcs = []
@@ -430,11 +437,11 @@ def main():
     # Plot the u and the v displacements
     fig, axs = plt.subplots(ncols=1, nrows=2)
     poisson.plot(u, ax=axs[0], levels=20)
-    axs[0].set_title('u')
+    axs[0].set_title("u")
     poisson.plot(psi, ax=axs[1], levels=20)
-    axs[1].set_title('$\psi$')
+    axs[1].set_title("$\psi$")
     plt.show()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

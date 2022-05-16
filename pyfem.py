@@ -1,8 +1,10 @@
 import numpy as np
 from scipy import sparse
+from scipy.sparse.linalg import spsolve, gmres
 from time import perf_counter_ns
 from abc import ABC, abstractmethod
 import matplotlib.pyplot as plt
+import pyamg
 import argparse
 
 
@@ -302,15 +304,21 @@ class Assembler:
     @time_this
     def __init__(
         self,
+        nodes,
         conn,
         X,
+        bcs,
+        bc_vals,
         quadrature: QuadratureBase,
         basis: BasisBase,
         model: PhysicalModelBase,
     ):
         # Prepare and take inputs
+        self.nodes = nodes
         self.conn = np.array(conn)  # connectivity: nelems * nnodes_per_elem
         self.X = np.array(X)  # nodal locations: nnodes * ndims
+        self.bcs = np.array(bcs)
+        self.bc_vals = np.array(bc_vals) if bc_vals is not None else None
         self.quadrature = quadrature
         self.basis = basis
         self.model = model  # physical model
@@ -322,6 +330,9 @@ class Assembler:
         self.ndims = X.shape[1]
         self.nquads = self.quadrature.get_nquads()
         self.nvars_per_node = self.model.get_nvars_per_node()
+
+        # Compute free dof
+        self.free = np.setdiff1d(self.nodes, bcs)  # indices of free dofs
 
         # Compute indices for non-zero entries
         self.nz_i, self.nz_j = self._compute_nz_pattern()
@@ -366,8 +377,10 @@ class Assembler:
             (self.nelems, self.nquads, self.nnodes_per_elem, self.ndims)
         )  # gradient of basis w.r.t. global coordinates
 
-        # Global Jacobian (stiffness) matrix and rhs to be created
-        self.rhs = None
+        # Allocate memory for global rhs
+        self.rhs = np.zeros(self.nnodes * self.nvars_per_node)
+
+        # To be computed
         self.K = None
 
         return
@@ -589,9 +602,100 @@ class Assembler:
 
         return self._assemble_jacobian(self.Ke)
 
+    @time_this
+    def apply_dirichlet_bcs(self, enforce_symmetric_K=True):
+        """
+        Apply Dirichlet boundary conditions to global Jacobian matrix and
+        right-hand-side vector. In general, the linear system with boundary
+        conditions becomes:
+
+            [Krr Krb  [ur    [fr
+             0   I  ]  u0] =  u0]
+
+        where u0 is the fixed values for Dirichlet bc, ur is the unknown states,
+        optionally, to make the system symmetric, we could move Krb to rhs:
+
+         => [Krr 0  [ur    [fr - Krb u0
+             0   I]  u0] =  u0         ]
+        """
+        bcs = self.bcs  # list of nodal indices to enforce bc
+        bc_vals = self.bc_vals  # list of nodal bc values, None if set to zero
+        free = self.free
+
+        # Save Krb and diagonals
+        temp = self.K[free, :]
+        Krb = temp[:, bcs]
+        diag = self.K.diagonal()
+
+        # Zero-out rows
+        for i in bcs:
+            self.K.data[self.K.indptr[i] : self.K.indptr[i + 1]] = 0
+
+        # Zero-out columns
+        if enforce_symmetric_K:
+            self.K = self.K.tocsc()
+            for i in bcs:
+                self.K.data[self.K.indptr[i] : self.K.indptr[i + 1]] = 0
+            self.K = self.K.tocsr()
+
+        # Set diagonals to 1
+        diag[bcs] = 1.0
+        self.K.setdiag(diag)
+
+        # Remove 0
+        self.K.eliminate_zeros()
+
+        # Set rhs
+        if bc_vals is None:
+            self.rhs[bcs] = 0.0
+        else:
+            self.rhs[bcs] = bc_vals[:]
+            if enforce_symmetric_K:
+                self.rhs[free] -= Krb.dot(bc_vals)
+        return
+
+    @time_this
+    def solve(self, K, rhs, method="direct"):
+        """
+        Solve the linear system
+
+        Args:
+            method: direct or gmres
+
+        Return:
+            u: solution
+        """
+        if method == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = gmres(K, rhs, M=M)
+            if fail:
+                raise RuntimeError(f"GMRES failed with code {fail}")
+        return u
+
+    @time_this
+    def analysis(self):
+        """
+        Perform the static analysis
+        """
+        self.K = self.compute_jacobian()
+        self.compute_rhs(self.rhs)
+        self.apply_dirichlet_bcs(enforce_symmetric_K=True)
+        u = self.solve(self.K, self.rhs, method="gmres")
+        return u
+
 
 @time_this
 def create_problem(m, n):
+    """
+    Create a simple, structured, 2-dimensional rectangular mesh
+
+    Args:
+        m: number of elements in x direction
+        n: number of elements in y direction
+    """
     nelems = m * n
     nnodes = (m + 1) * (n + 1)
     x = np.linspace(0, m / n, m + 1)
@@ -620,50 +724,41 @@ def create_problem(m, n):
         bcs.append(nodes[j, 0])
         bcs.append(nodes[j, -1])
 
-    return nelems, nnodes, conn, X, bcs
+    return nelems, nnodes, nodes, conn, X, bcs
 
 
 @time_this
 def main():
     p = argparse.ArgumentParser()
 
-    p.add_argument("--m", type=int, default=3)
-    p.add_argument("--n", type=int, default=2)
+    p.add_argument("--m", type=int, default=2)
+    p.add_argument("--n", type=int, default=1)
     args = p.parse_args()
 
     m = args.m
     n = args.n
 
     # Create mesh
-    nelems, nnodes, conn, X, bcs = create_problem(m, n)
+    nelems, nnodes, nodes, conn, X, bcs = create_problem(m, n)
+    bc_vals = None
 
     # Old code
     from ref_linear_poisson import Poisson, gfunc
 
     poisson = Poisson(conn, X, bcs, gfunc)
+    u_old = poisson.solve()
 
     # Refactored code
     quadrature = QuadratureBilinear2D()
     basis = BasisBilinear2D(quadrature)
     model = LinearPoisson2D()
-    assembler = Assembler(conn, X, quadrature, basis, model)
-
-    # Check rhs
-    rhs_old = poisson._compute_rhs(gfunc)
-    rhs = np.zeros(nnodes)
-    assembler.compute_rhs(rhs)
-    print("Check global rhs:")
-    print("max(rhs):", np.max(rhs_old))
-    print("max err: ", np.max(rhs_old - rhs))
-
-    # Check K
-    K_old = poisson.assemble_jacobian()
-    K = assembler.compute_jacobian()
-    Ke = assembler.Ke
-    nnz = K.count_nonzero()
-    print("Check global K:")
-    print("max(K):  ", np.max(K_old))
-    print("max(err):", np.max(K_old - K))
+    assembler = Assembler(nodes, conn, X, bcs, bc_vals, quadrature, basis, model)
+    u = assembler.analysis()
+    print("Check solution")
+    np.random.seed(0)
+    p = np.random.rand(u.shape[0])
+    print(f"u_old: {u_old.dot(p)}")
+    print(f"u    : {u.dot(p)}")
 
 
 if __name__ == "__main__":
