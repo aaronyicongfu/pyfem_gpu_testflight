@@ -35,11 +35,17 @@ def time_this(func):
 
 class QuadratureBase(ABC):
     """
-    Abstract class for quadrature object
+    Abstract base class for quadrature object
     """
 
-    @time_this
+    @abstractmethod
     def __init__(self, pts, weights):
+        """
+        Args:
+            pts: list-like, list of quadrature points
+            weights: list-like, list of quadrature weights
+        """
+        assert len(pts) == len(weights)  # sanity check
         self.pts = pts
         self.weights = weights
         self.nquads = pts.shape[0]
@@ -52,7 +58,7 @@ class QuadratureBase(ABC):
         """
         return self.nquads
 
-    @abstractmethod
+    @time_this
     def get_pt(self, idx=None):
         """
         Query the <idx>-th quadrature point (xi, eta) or (xi, eta, zeta) based
@@ -64,7 +70,7 @@ class QuadratureBase(ABC):
         else:
             return self.pts
 
-    @abstractmethod
+    @time_this
     def get_weight(self, idx=None):
         """
         Query the weight of <idx>-th quadrature point, if idx is None, return
@@ -76,40 +82,130 @@ class QuadratureBase(ABC):
             return self.weights
 
 
+class QuadratureBilinear2D(QuadratureBase):
+    @time_this
+    def __init__(self):
+        # fmt: off
+        pts = np.array([[-1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [ 1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [ 1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
+                        [-1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)]])
+        # fmt: on
+        weights = np.array([1.0, 1.0, 1.0, 1.0])
+        super().__init__(pts, weights)
+        return
+
+
 class BasisBase(ABC):
     """
     Abstract class for the element basis function
     """
 
-    @time_this
-    def __init__(self, quadrature):
+    @abstractmethod
+    def __init__(self, ndims, nnodes_per_elem, quadrature: QuadratureBase):
         """
         Inputs:
+            ndims: int, number of physical dimensions (2 or 3)
+            nnodes_per_elem: int, number of nodes per element
             quadrature: object of type QuadratureBase
         """
+        self.ndims = ndims
+        self.nnodes_per_elem = nnodes_per_elem
         self.quadrature = quadrature
+        self.nquads = self.quadrature.get_nquads()
+        self.N = None
+        self.Nderiv = None
         return
 
     @abstractmethod
-    def eval_shape_fun(self, N):
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+        """
+        Args:
+            qpt: a single quadrature point in local coordinate (xi, eta, ...)
+
+        Return:
+            shape_vals: list-like, shape function value for each node
+        """
+        shape_vals = []
+        return shape_vals
+
+    @abstractmethod
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+        """
+        Args:
+            qpt: a single quadrature point in local coordinate (xi, eta, ...)
+
+        Return:
+            shape_derivs: 1-dim list, [*dN1, *dN2, ...], where dNi = [dNi/dxi,
+                          dNi/deta, ..]
+        """
+        shape_derivs = []
+        return shape_derivs
+
+    @time_this
+    def eval_shape_fun(self):
         """
         Evaluate the shape function values at quadrature points
 
-        Outputs:
-            N: shape function values, (nquads, nnodes_per_elem)
+        Return:
+            shape function values at each quadrature point
         """
-        return
+        if self.N is None:
+            self.N = np.zeros((self.nquads, self.nnodes_per_elem))
+            self.N[:, :] = list(
+                map(self._eval_shape_fun_on_quad_pt, self.quadrature.get_pt())
+            )
+        return self.N
 
-    @abstractmethod
-    def eval_shape_fun_deriv(self, Nderiv):
+    @time_this
+    def eval_shape_fun_deriv(self):
         """
         Evaluate the shape function derivatives at quadrature points
 
-        Outputs:
-            Nderiv: shape function derivatives w.r.t. local coordinate,
-                    (nquads, nnodes_per_elem, ndims)
+        Return:
+            shape function derivatives at each quadrature point w.r.t. each
+            local coordinate xi, eta, ...
         """
+        if self.Nderiv is None:
+            self.Nderiv = np.zeros((self.nquads, self.nnodes_per_elem, self.ndims))
+            self.Nderiv[:, :, :] = np.array(
+                list(map(self._eval_shape_deriv_on_quad_pt, self.quadrature.get_pt()))
+            ).reshape((self.nquads, self.nnodes_per_elem, self.ndims))
+        return self.Nderiv
+
+
+class BasisBilinear2D(BasisBase):
+    @time_this
+    def __init__(self, quadrature):
+        ndims = 2
+        nnodes_per_elem = 4
+        super().__init__(ndims, nnodes_per_elem, quadrature)
         return
+
+    @time_this
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+        shape_vals = [
+            0.25 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
+            0.25 * (1.0 + qpt[0]) * (1.0 - qpt[1]),
+            0.25 * (1.0 + qpt[0]) * (1.0 + qpt[1]),
+            0.25 * (1.0 - qpt[0]) * (1.0 + qpt[1]),
+        ]
+        return shape_vals
+
+    @time_this
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+        shape_derivs = [
+            # fmt: off
+            -0.25 * (1.0 - qpt[1]),
+            -0.25 * (1.0 - qpt[0]),
+             0.25 * (1.0 - qpt[1]),
+            -0.25 * (1.0 + qpt[0]),
+             0.25 * (1.0 + qpt[1]),
+             0.25 * (1.0 + qpt[0]),
+            -0.25 * (1.0 + qpt[1]),
+             0.25 * (1.0 - qpt[0]),
+        ]
+        return shape_derivs
 
 
 class PhysicalModelBase(ABC):
@@ -134,89 +230,6 @@ class PhysicalModelBase(ABC):
 
     @abstractmethod
     def compute_element_jacobian(self):
-        return
-
-
-class QuadratureBilinear2D(QuadratureBase):
-    @time_this
-    def __init__(self):
-        pts = np.array(
-            [
-                # fmt: off
-                [-1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
-                [ 1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
-                [ 1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
-                [-1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
-            ]
-        )
-        weights = np.array([1.0, 1.0, 1.0, 1.0])
-        super().__init__(pts, weights)
-        return
-
-    @time_this
-    def get_pt(self, idx=None):
-        return super().get_pt(idx)
-
-    @time_this
-    def get_weight(self, idx=None):
-        return super().get_weight(idx)
-
-
-class BasisBilinear2D(BasisBase):
-    @time_this
-    def __init__(self, quadrature):
-        super().__init__(quadrature)
-        return
-
-    @time_this
-    def eval_shape_fun(self, N):
-        quad_pts = self.quadrature.get_pt()
-        N[...] = np.array(
-            list(
-                map(
-                    lambda qpt: [
-                        0.25 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
-                        0.25 * (1.0 + qpt[0]) * (1.0 - qpt[1]),
-                        0.25 * (1.0 + qpt[0]) * (1.0 + qpt[1]),
-                        0.25 * (1.0 - qpt[0]) * (1.0 + qpt[1]),
-                    ],
-                    quad_pts,
-                )
-            )
-        )
-        return
-
-    @time_this
-    def eval_shape_fun_deriv(self, Nderiv):
-        quad_pts = self.quadrature.get_pt()
-        Nderiv[..., 0] = np.array(
-            list(
-                map(
-                    lambda qpt: [
-                        # fmt: off
-                        -0.25 * (1.0 - qpt[1]),
-                         0.25 * (1.0 - qpt[1]),
-                         0.25 * (1.0 + qpt[1]),
-                        -0.25 * (1.0 + qpt[1]),
-                    ],
-                    quad_pts,
-                )
-            )
-        )
-        Nderiv[..., 1] = np.array(
-            list(
-                map(
-                    lambda qpt: [
-                        # fmt: off
-                        -0.25 * (1.0 - qpt[0]),
-                        -0.25 * (1.0 + qpt[0]),
-                         0.25 * (1.0 + qpt[0]),
-                         0.25 * (1.0 - qpt[0]),
-                    ],
-                    quad_pts,
-                )
-            )
-        )
         return
 
 
@@ -448,13 +461,13 @@ class Assembler:
         self.nquads = self.quadrature.get_nquads()
         self.ndof_per_node = self.model.get_ndof_per_node()
 
-        # Integrity check: nodes
+        # Sanity check: nodes
         assert len(self.nodes.shape) == 1  # shape check
         assert self.nodes.min() == 0  # 0-based index check
         assert self.nodes.max() == self.nodes.shape[0] - 1  # no-skip check
         assert len(self.nodes) == len(set(self.nodes))  # no-duplicate check
 
-        # Integrity check: conn
+        # Sanity check: conn
         assert self.conn.flatten().min() == 0
         assert self.conn.flatten().max() == self.nodes.shape[0] - 1
 
@@ -518,7 +531,7 @@ class Assembler:
         self.detJq = np.zeros(
             (self.nelems, self.nquads)
         )  # determinants of Jacobian transformations
-        self.N = np.zeros((self.nquads, self.nnodes_per_elem))  # shape function values
+        # self.N = np.zeros((self.nquads, self.nnodes_per_elem))  # shape function values
         self.Nderiv = np.zeros(
             (self.nquads, self.nnodes_per_elem, self.ndims)
         )  # shape function derivatives w.r.t. local coordinates
@@ -533,30 +546,6 @@ class Assembler:
         self.K = None
 
         return
-
-    # @time_this
-    # def _count_node_duplicate(self):
-    #     """
-    #     Count number of duplicates for each node
-    #     """
-    #     _, counts = np.unique(self.conn, return_counts=True)
-    #     return counts
-
-    @time_this
-    def __compute_nz_pattern(self):
-        """
-        Compute the non-zero coordinates  (slow implementation, use the other
-        one instead)
-        """
-        # Compute non-zero pattern (i, j)
-        i = []
-        j = []
-        for index in range(self.nelems):
-            for ii in self.conn[index, :]:
-                for jj in self.conn[index, :]:
-                    i.append(ii)
-                    j.append(jj)
-        return np.array(i, dtype=int), np.array(j, dtype=int)
 
     @time_this
     def _compute_nz_pattern(self):
@@ -705,8 +694,8 @@ class Assembler:
         """
         if isinstance(self.model, LinearPoisson2D):
             # Compute shape function and derivatives
-            self.basis.eval_shape_fun(self.N)
-            self.basis.eval_shape_fun_deriv(self.Nderiv)
+            self.N = self.basis.eval_shape_fun()
+            self.Nderiv = self.basis.eval_shape_fun_deriv()
 
             # Compute Jacobian transformation -> Jq
             self._compute_jtrans(self.Xe, self.Nderiv, self.Jq)
@@ -741,7 +730,7 @@ class Assembler:
             K: (sparse) global Jacobian matrix
         """
         # Compute Jacobian derivatives
-        self.basis.eval_shape_fun_deriv(self.Nderiv)
+        self.Nderiv = self.basis.eval_shape_fun_deriv()
 
         # Compute Jacobian transformation -> Jq
         self._compute_jtrans(self.Xe, self.Nderiv, self.Jq)
