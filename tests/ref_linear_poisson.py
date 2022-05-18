@@ -439,7 +439,7 @@ def main():
     poisson.plot(u, ax=axs[0], levels=20)
     axs[0].set_title("u")
     poisson.plot(psi, ax=axs[1], levels=20)
-    axs[1].set_title("$\psi$")
+    axs[1].set_title(r"$\psi$")
     plt.show()
 
 
