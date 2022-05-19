@@ -24,8 +24,6 @@ class PlaneStressCase(unittest.TestCase):
         # Compute u
         creator = pyfem.ProblemCreator(nelems_x=32, nelems_y=32)
         (
-            nelems,
-            nnodes_per_elem,
             nodes,
             conn,
             X,
@@ -34,11 +32,11 @@ class PlaneStressCase(unittest.TestCase):
         ) = creator.create_linear_elasticity_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.PlaneStress2D(nelems, nnodes_per_elem, quadrature.get_nquads())
-        assembler = pyfem.Assembler(
-            nodes, conn, X, dof_fixed, quadrature, basis, model, nodal_force=nodal_force
+        model = pyfem.PlaneStress2D(
+            nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
         )
-        u = assembler.analysis(method="direct")
+        assembler = pyfem.Assembler(model)
+        u = assembler.solve(method="direct")
 
         # Compute u_ref
         u_ref = ref_plane_stress(conn, X, dof_fixed, nodal_force)

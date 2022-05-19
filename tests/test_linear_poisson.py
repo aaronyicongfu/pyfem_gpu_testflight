@@ -14,9 +14,11 @@ class LinearPoissonCase(unittest.TestCase):
         nodes, conn, X, dof_fixed = creator.create_poisson_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.LinearPoisson2D()
-        assembler = pyfem.Assembler(nodes, conn, X, dof_fixed, quadrature, basis, model)
-        u = assembler.analysis(method="direct")
+        model = pyfem.LinearPoisson2D(
+            nodes, X, conn, dof_fixed, None, quadrature, basis
+        )
+        assembler = pyfem.Assembler(model)
+        u = assembler.solve(method="direct")
 
         # Compute u_ref
         poisson = Poisson(conn, X, dof_fixed, gfunc)

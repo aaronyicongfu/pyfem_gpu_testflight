@@ -1,36 +1,11 @@
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve, gmres
-from time import perf_counter_ns
 from abc import ABC, abstractmethod
 import matplotlib.tri as tri
 import pyamg
-
-
-def time_this(func):
-    """
-    Decorator: time the execution of a function
-    """
-    tab = "    "
-    time_this.counter = 0  # a "static" variable
-    fun_name = func.__qualname__
-
-    def wrapper(*args, **kwargs):
-        info_str = f"{tab*time_this.counter}{fun_name}() called"
-        print(f"[timer] {info_str:<40s}")
-        time_this.counter += 1
-        t0 = perf_counter_ns()
-        ret = func(*args, **kwargs)
-        t1 = perf_counter_ns()
-        time_this.counter -= 1
-        info_str = f"{tab*time_this.counter}{fun_name}() return"
-        print(
-            f"[timer] {info_str:<80s}",
-            f"({(t1 - t0) / 1e6:.2f} ms)",
-        )
-        return ret
-
-    return wrapper
+import utils
+from utils import time_this
 
 
 class QuadratureBase(ABC):
@@ -208,258 +183,50 @@ class BasisBilinear2D(BasisBase):
         return shape_derivs
 
 
-class PhysicalModelBase(ABC):
+class ModelBase(ABC):
     """
-    Abstract class for the physical problem to be solved by the finite element
-    method
-    TODO: how to generalize this class?
+    Abstract base class for the problem model and physics
     """
-
-    @time_this
-    def __init__(self, ndof_per_node):
-        self.ndof_per_node = ndof_per_node
-        return
-
-    @time_this
-    def get_ndof_per_node(self):
-        return self.ndof_per_node
 
     @abstractmethod
-    def compute_element_rhs(self):
-        return
-
-    @abstractmethod
-    def compute_element_jacobian(self):
-        return
-
-
-class LinearPoisson2D(PhysicalModelBase):
-    """
-    The 2-dimensional Poisson equation
-
-    Equation:
-    -∆u = g in Ω
-
-    Boundary condition:
-    u = u0 on ∂Ω
-
-    Weak form:
-    ∫ ∇u ∇v dΩ = ∫gv dΩ for test function v
-    """
-
-    @time_this
-    def __init__(self):
-        self.fun_vals = None
-        ndof_per_node = 1
-        super().__init__(ndof_per_node)
-        return
-
-    @time_this
-    def _compute_gfun(self, Xq, fun_vals):
-        xvals = Xq[..., 0]
-        yvals = Xq[..., 1]
-        fun_vals[...] = xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
-        return
-
-    @time_this
-    def compute_element_rhs(self, quadrature, N, detJq, Xq, rhs_e):
-        """
-        Evaluate element-wise rhs vectors:
-
-            rhs_e = ∑ detJq wq (gN)_q
-                    q
-
-        Inputs:
-            quadrature (QuadratureBase)
-            N: shape function values, (nnodes_per_elem, nquads)
-            detJq: Jacobian determinants, (nelems, nquads)
-            Xq: quadrature location in global coordinates, (nelems,
-                nquads, ndims)
-
-        Outputs:
-            rhs_e: element-wise rhs, (nelems, nnodes_per_elem * ndof_per_node)
-        """
-        # Allocate memory for quadrature function values
-        if self.fun_vals is None:
-            self.fun_vals = np.zeros(Xq.shape[0:-1])
-
-        # Evaluate function g
-        self._compute_gfun(Xq, self.fun_vals)
-
-        # Compute element rhs
-        wq = quadrature.get_weight()
-        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", detJq, wq, N, self.fun_vals)
-        return
-
-    @time_this
-    def compute_element_jacobian(self, quadrature, Ngrad, detJq, Ke):
-        """
-        Evaluate element-wise Jacobian matrices
-
-            Ke = ∑ detJq wq ( NxNxT + NyNyT)_q
-                 q
-
-        Inputs:
-            quadrature (QuadratureBase)
-            Ngrad: shape function gradient, (nelems, nquads, nnodes_per_elem,
-                   ndims)
-            detJq: Jacobian determinants, (nelems, nquads)
-
-        Outputs:
-            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
-                ndof_per_node, nnodes_per_elem * ndof_per_node)
-        """
-        wq = quadrature.get_weight()
-        Ke[...] = np.einsum("iq,q,iqjl,iqkl -> ijk", detJq, wq, Ngrad, Ngrad)
-        return
-
-
-class PlaneStress2D(PhysicalModelBase):
-    """
-    The 2-dimensional linear elasticity equation
-
-    Integral form using the principle of virtual displacement:
-    ∫ eTs dΩ = ∫uTf dΩ
-
-    where:
-        e: strain vector
-        s: stress vector
-        u: nodal displacement
-        f: nodal external force
-    """
-
-    @time_this
-    def __init__(self, nelems, nnodes_per_elem, nquads, E=10.0, nu=0.3):
-        ndof_per_node = 2
-        self.ndof_per_node = ndof_per_node
-        self.nelems = nelems
-        self.nnodes_per_elem = nnodes_per_elem
-
-        # fmt: off
-        self.C = E * np.array([[1.0, nu, 0.0],
-                               [nu, 1.0, 0.0],
-                               [0.0, 0.0, 0.5 * (1.0 - nu)]])
-        self.C *= 1.0 / (1.0 - nu**2)
-        # fmt: on
-
-        n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
-        self.Be = np.zeros(
-            (self.nelems, nquads, n_stress_tensor, nnodes_per_elem * ndof_per_node)
-        )
-        super().__init__(ndof_per_node=2)
-        return
-
-    @time_this
-    def _compute_element_B(self, Ngrad, Be):
-        """
-        Compute element B matrix
-
-        Input:
-            Ngrad: shape function gradient, (nelems, nquads, nnodes_per_elem,
-                   ndims)
-
-        Output:
-            Be: function that maps u to strain, (nelems, ndof_per_node,
-            nnodes_per_elem * ndof_per_node)
-        """
-        Nx = Ngrad[..., 0]
-        Ny = Ngrad[..., 1]
-        Be[:, :, 0, ::2] = Nx
-        Be[:, :, 1, 1::2] = Ny
-        Be[:, :, 2, ::2] = Ny
-        Be[:, :, 2, 1::2] = Nx
-        return
-
-    @time_this
-    def compute_element_rhs(self):
-        """
-        Evaluate element-wise force vector, which can be computed by taking the
-        derivative w.r.t. u, hence rhs = f
-        """
-        return
-
-    @time_this
-    def compute_element_jacobian(self, quadrature, Ngrad, detJq, Ke):
-        """
-        Evaluate element-wise stiffness matrix Ke
-
-        ∫ eTs dΩ can be integrated numerically using quadrature:
-
-            ∫eTs dΩ ~= ∑ detJq wq eTs
-                       q
-
-        where e = Bu, s = Ce = CBu.  Then, Ke can be computed by taking the 2nd
-        order derivatives w.r.t. u:
-
-            Ke = ∑ detJq wq (BTCB)q
-                  q
-
-        Inputs:
-            quadrature (QuadratureBase)
-            N: shape function values, (nnodes_per_elem, nquads)
-            detJq: Jacobian determinants, (nelems, nquads)
-            fe: element-wise nodal force, (nelems, nnodes_per_elem *
-            ndof_per_node)
-
-        Outputs:
-            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
-                ndof_per_node, nnodes_per_elem * ndof_per_node)
-        """
-        wq = quadrature.get_weight()
-        self._compute_element_B(Ngrad, self.Be)
-        Ke[...] = np.einsum(
-            "iq,q,iqnj,nm,iqmk->ijk", detJq, wq, self.Be, self.C, self.Be
-        )
-        return
-
-
-class Assembler:
-    @time_this
     def __init__(
         self,
+        ndof_per_node,
         nodes,
-        conn,
         X,
+        conn,
         dof_fixed,
+        dof_fixed_vals,
         quadrature: QuadratureBase,
         basis: BasisBase,
-        model: PhysicalModelBase,
-        dof_fixed_vals=None,
-        nodal_force=None,  # Needed for structural physics
     ):
         """
-        The finite element problem assembler.
-
-        Args:
-            nodes: 0-based nodal indices, (nnodes, )
-            conn: connectivity matrix, (nelems, nnodes_per_elem)
-            X: nodal location matrix, (nnodes, ndims)
-            dof_fixed: list of dof indices to enforce boundary condition, (Ndof_bc, )
-            dof_fixed_vals: list of bc values, (Ndof_bc, ), or None
-            nodal_force: nodal force dictionary, nodal_force[nidx] = [fx, fy, fz, etc.]
+        ndof_per_node: int, number of component of state variable
+        nodes: 0-based nodal indices, (nnodes, )
+        X: nodal location matrix, (nnodes, ndims)
+        conn: connectivity matrix, (nelems, nnodes_per_elem)
+        dof_fixed: list of dof indices to enforce boundary condition, (Ndof_bc, )
+        dof_fixed_vals: list of bc values, (Ndof_bc, ), None means all fixed
+                        values are 0
         """
-        # Convert input to property types
+        self.ndof_per_node = ndof_per_node
         self.nodes = np.array(nodes, dtype=int)
-        self.conn = np.array(conn, dtype=int)  # connectivity: nelems * nnodes_per_elem
-        self.X = np.array(X, dtype=float)  # nodal locations: nnodes * ndims
+        self.X = np.array(X, dtype=float)
+        self.conn = np.array(conn, dtype=int)
         self.dof_fixed = np.array(dof_fixed, dtype=int)
-        self.dof_fixed_vals = (
-            np.array(dof_fixed_vals, dtype=float)
-            if dof_fixed_vals is not None
-            else None
-        )
+        if dof_fixed_vals is None:
+            self.dof_fixed_vals = None
+        else:
+            self.dof_fixed_vals = np.array(dof_fixed_vals, dtype=float)
         self.quadrature = quadrature
         self.basis = basis
-        self.model = model  # physical model
-        self.nodal_force = nodal_force
 
         # Get dimension information
         self.nelems = conn.shape[0]
         self.nnodes_per_elem = conn.shape[1]
         self.nnodes = X.shape[0]
         self.ndims = X.shape[1]
-        self.nquads = self.quadrature.get_nquads()
-        self.ndof_per_node = self.model.get_ndof_per_node()
+        self.nquads = quadrature.get_nquads()
 
         # Sanity check: nodes
         assert len(self.nodes.shape) == 1  # shape check
@@ -471,44 +238,33 @@ class Assembler:
         assert self.conn.flatten().min() == 0
         assert self.conn.flatten().max() == self.nodes.shape[0] - 1
 
-        # Compute the numbering of the state variable doff
-        if self.ndof_per_node == 1:
-            self.dof = self.nodes
-            self.dof_each_node = self.nodes
-        else:
-            self.dof = np.zeros((self.nnodes * self.ndof_per_node), dtype=int)
-            self.dof_each_node = np.zeros((self.nnodes, self.ndof_per_node), dtype=int)
-            for axis in range(self.ndof_per_node):
-                self.dof[axis :: self.ndof_per_node] = (
-                    axis + self.ndof_per_node * self.nodes
-                )
-                self.dof_each_node[:, axis] = axis + self.ndof_per_node * self.nodes
+        """
+        Compute dof information
+        """
+        # Create dof arrays
+        self.dof, self.dof_each_node, self.conn_dof = utils.create_dof(
+            self.nnodes,
+            self.nelems,
+            self.nnodes_per_elem,
+            self.ndof_per_node,
+            self.nodes,
+            self.conn,
+        )
 
-        # Compute the connectivity for the state variable numbering
-        if self.ndof_per_node == 1:
-            self.conn_dof = self.conn
-        else:
-            self.conn_dof = np.zeros(
-                (self.nelems, self.nnodes_per_elem * self.ndof_per_node), dtype=int
-            )
-            for axis in range(self.ndof_per_node):
-                self.conn_dof[:, axis :: self.ndof_per_node] = (
-                    axis + self.ndof_per_node * self.conn
-                )
+        # Compute free dof indices
+        self.dof_free = np.setdiff1d(self.dof, self.dof_fixed)
 
-        # Compute freed dof
-        self.dof_free = np.setdiff1d(self.dof, self.dof_fixed)  # indices of free dofs
+        """
+        Allocate memory for the element-wise data
+        """
+        # Nodal coordinates
+        self.Xe = np.zeros((self.nelems, self.nnodes_per_elem, self.ndims))
+        utils.scatter_node_to_elem(self.conn, self.X, self.Xe)
 
-        # Compute indices for non-zero entries
-        self.nz_i, self.nz_j = self._compute_nz_pattern()
+        # Element-wise rhs
+        self.rhs_e = np.zeros((self.nelems, self.nnodes_per_elem * self.ndof_per_node))
 
-        # Allocate memory for the element-wise data
-        self.Xe = np.zeros(
-            (self.nelems, self.nnodes_per_elem, self.ndims)
-        )  # nodal locations
-        self.rhs_e = np.zeros(
-            (self.nelems, self.nnodes_per_elem * self.ndof_per_node)
-        )  # rhs vectors for each element
+        # Element-wise Jacobian matrix
         self.Ke = np.zeros(
             (
                 self.nelems,
@@ -517,35 +273,113 @@ class Assembler:
             )
         )
 
-        # Scatter X -> Xe
-        self._scatter_node_to_elem(self.X, self.Xe)
+        """
+        Allocate memory for quadrature data
+        """
+        # Nodal coordinates
+        self.Xq = np.zeros((self.nelems, self.nquads, self.ndims))
 
-        # Allocate memory for quadrature data
-        self.Xq = np.zeros((self.nelems, self.nquads, self.ndims))  # nodal locations
-        self.Jq = np.zeros(
-            (self.nelems, self.nquads, self.ndims, self.ndims)
-        )  # Jacobian transformations
-        self.invJq = np.zeros(
-            (self.nelems, self.nquads, self.ndims, self.ndims)
-        )  # inverse of Jacobian transformations
-        self.detJq = np.zeros(
-            (self.nelems, self.nquads)
-        )  # determinants of Jacobian transformations
-        # self.N = np.zeros((self.nquads, self.nnodes_per_elem))  # shape function values
-        self.Nderiv = np.zeros(
-            (self.nquads, self.nnodes_per_elem, self.ndims)
-        )  # shape function derivatives w.r.t. local coordinates
+        # Jacobian transformation
+        self.Jq = np.zeros((self.nelems, self.nquads, self.ndims, self.ndims))
+
+        # Jacobian transformation inverse
+        self.invJq = np.zeros((self.nelems, self.nquads, self.ndims, self.ndims))
+
+        # Jacobian determinant
+        self.detJq = np.zeros((self.nelems, self.nquads))
+
+        # gradient of basis w.r.t. global coordinates
         self.Ngrad = np.zeros(
             (self.nelems, self.nquads, self.nnodes_per_elem, self.ndims)
-        )  # gradient of basis w.r.t. global coordinates
+        )
 
-        # Allocate memory for global rhs
+        """
+        Global linear system
+        """
+        # Compute indices for non-zero entries
+        self.nz_i, self.nz_j = self._compute_nz_pattern()
+
+        # rhs and K
         self.rhs = np.zeros(self.nnodes * self.ndof_per_node)
-
-        # To be computed
-        self.K = None
-
         return
+
+    @abstractmethod
+    def compute_rhs(self):
+        """
+        Compute the global rhs vector
+
+        Return:
+            self.rhs
+        """
+        return self.rhs
+
+    @abstractmethod
+    def compute_jacobian(self):
+        """
+        Compute the global Jacobian matrix.
+
+        Return:
+            K
+        """
+        K = None
+        return K
+
+    @time_this
+    def apply_dirichlet_bcs(self, K, rhs, enforce_symmetric_K=True):
+        """
+        Apply Dirichlet boundary conditions to global Jacobian matrix and
+        right-hand-side vector. In general, the linear system with boundary
+        conditions becomes:
+
+            [Krr Krb  [ur    [fr
+             0   I  ]  u0] =  u0]
+
+        where u0 is the fixed values for Dirichlet bc, ur is the unknown states,
+        optionally, to make the system symmetric, we could move Krb to rhs:
+
+         => [Krr 0  [ur    [fr - Krb u0
+             0   I]  u0] =  u0         ]
+
+        Inputs:
+            K: stiffness matrix
+            rhs: right-hand-side vector
+            enforce_symmetric_K: zero out rows and columns to maintain symmetry
+
+        Return:
+            K: stiffness matrix with bcs
+            rhs: rhs with bcs
+        """
+        # Save Krb and diagonals
+        temp = K[self.dof_free, :]
+        Krb = temp[:, self.dof_fixed]
+        diag = K.diagonal()
+
+        # Zero-out rows
+        for i in self.dof_fixed:
+            K.data[K.indptr[i] : K.indptr[i + 1]] = 0
+
+        # Zero-out columns
+        if enforce_symmetric_K:
+            K = K.tocsc()
+            for i in self.dof_fixed:
+                K.data[K.indptr[i] : K.indptr[i + 1]] = 0
+            K = K.tocsr()
+
+        # Set diagonals to 1
+        diag[self.dof_fixed] = 1.0
+        K.setdiag(diag)
+
+        # Remove 0
+        K.eliminate_zeros()
+
+        # Set rhs
+        if self.dof_fixed_vals is None:
+            rhs[self.dof_fixed] = 0.0
+        else:
+            rhs[self.dof_fixed] = self.dof_fixed_vals[:]
+            if enforce_symmetric_K:
+                rhs[self.dof_free] -= Krb.dot(self.dof_fixed_vals)
+        return K, rhs
 
     @time_this
     def _compute_nz_pattern(self):
@@ -571,97 +405,7 @@ class Assembler:
         return nz_i, nz_j
 
     @time_this
-    def _scatter_node_to_elem(self, data, data_e):
-        """
-        Scatter nodal quantities to elements: data -> data_e
-
-        Inputs:
-            data: nodal data, (nnodes, X)
-
-        Outputs:
-            data_e: element-wise data, (nelems, nnodes_per_elem, X)
-        """
-        data_e[...] = data[self.conn]
-        return
-
-    @time_this
-    def _compute_jtrans(self, Xe, Nderiv, Jq):
-        """
-        Compute the Jacobian transformation, inverse and determinant
-
-        Inputs:
-            Xe: element nodal location
-            Nderiv: derivative of basis w.r.t. local coordinate
-
-        Outputs:
-            Jq: the Jacobian matrix on quadrature
-        """
-        Jq[:, :, :, :] = np.einsum("qlk, ilj -> iqjk", Nderiv, Xe)
-        return
-
-    @time_this
-    def _compute_jdet(self, Jq, detJq):
-        """
-        Compute the determinant given Jacobian.
-
-        Inputs:
-            Jq: the Jacobian matrices for each element and each quadrature point
-
-        Outputs:
-            detJq: the determinant of the Jacobian matrices
-        """
-        if self.ndims == 2:
-            detJq[...] = Jq[..., 0, 0] * Jq[..., 1, 1] - Jq[..., 0, 1] * Jq[..., 1, 0]
-        else:
-            raise NotImplementedError()
-        return
-
-    @time_this
-    def _compute_elem_interp(self, N, data_e, data_q):
-        """
-        Interpolate the quantities at quadrature points:
-        data_e -> data_q
-
-        Inputs:
-            N: basis values, (nquads, nnodes_per_elem)
-            data_e: element data, (nelems, nnodes_per_elem, X)
-
-        Outputs:
-            data_q: quadrature data, (nelems, nquads, X)
-        """
-        data_q[...] = np.einsum("jl, ilk -> ijk", N, data_e)
-        return
-
-    @time_this
-    def _compute_basis_grad(self, Jq, detJq, Nderiv, invJq, Ngrad):
-        """
-        Compute the derivatives of basis function with respect to global
-        coordinates on quadratures
-
-        Inputs:
-            Jq: Jacobian transformation on quadrature, (nelems, nquads, ndims,
-                ndims)
-            detJq: the determinant of the Jacobian matrices, (nelems, nquads)
-            Nderiv: shape function derivatives, (nquads, nnodes_per_elem, ndims)
-
-        Outputs:
-            invJq: Jacobian inverse, by-product, (nelems, nquads, ndims, ndims)
-            Ngrad: shape function gradient, (nelems, nquads, nnodes_per_elem,
-                   ndims)
-        """
-        # Compute Jacobian inverse
-        if self.ndims == 2:
-            invJq[..., 0, 0] = Jq[..., 1, 1] / detJq
-            invJq[..., 0, 1] = -Jq[..., 0, 1] / detJq
-            invJq[..., 1, 0] = -Jq[..., 1, 0] / detJq
-            invJq[..., 1, 1] = Jq[..., 0, 0] / detJq
-        else:
-            raise NotImplementedError
-        Ngrad[...] = np.einsum("jkm, ijml -> ijkl", Nderiv, invJq)
-        return
-
-    @time_this
-    def _assemble_rhs(self, quadrature, rhs_e, rhs):
+    def _assemble_rhs(self, rhs_e, rhs):
         """
         Assemble the global rhs given element-wise rhs: rhs_e -> rhs
 
@@ -672,7 +416,7 @@ class Assembler:
         Outputs:
             rhs: global rhs, (nnodes * ndof_per_node, )
         """
-        for n in range(quadrature.get_nquads()):
+        for n in range(self.quadrature.get_nquads()):
             np.add.at(rhs[:], self.conn_dof[:, n], rhs_e[:, n])
         return
 
@@ -684,41 +428,47 @@ class Assembler:
         K = sparse.coo_matrix((Ke.flatten(), (self.nz_i, self.nz_j)))
         return K.tocsr()
 
+
+class LinearPoisson2D(ModelBase):
+    """
+    The 2-dimensional Poisson equation
+
+    Equation:
+    -∆u = g in Ω
+
+    Boundary condition:
+    u = u0 on ∂Ω
+
+    Weak form:
+    ∫ ∇u ∇v dΩ = ∫gv dΩ for test function v
+    """
+
     @time_this
-    def compute_rhs(self, rhs):
-        """
-        Compute the element rhs vectors and assemble the global rhs
-
-        Outputs:
-            rhs: global right-hand-side vector
-        """
-        if isinstance(self.model, LinearPoisson2D):
-            # Compute shape function and derivatives
-            self.N = self.basis.eval_shape_fun()
-            self.Nderiv = self.basis.eval_shape_fun_deriv()
-
-            # Compute Jacobian transformation -> Jq
-            self._compute_jtrans(self.Xe, self.Nderiv, self.Jq)
-
-            # Compute Jacobian determinant -> detJq
-            self._compute_jdet(self.Jq, self.detJq)
-
-            # Compute element mapping -> Xq
-            self._compute_elem_interp(self.N, self.Xe, self.Xq)
-
-            # Compute element rhs vector -> rhs_e
-            self.model.compute_element_rhs(
-                self.quadrature, self.N, self.detJq, self.Xq, self.rhs_e
-            )
-
-            # Assemble the global rhs vector -> rhs
-            self._assemble_rhs(self.quadrature, self.rhs_e, rhs)
-
-        elif isinstance(self.model, PlaneStress2D):
-            rhs[self.dof_each_node[list(self.nodal_force.keys())].flatten()] = np.array(
-                list(self.nodal_force.values())
-            ).flatten()
+    def __init__(
+        self,
+        nodes,
+        X,
+        conn,
+        dof_fixed,
+        dof_fixed_vals,
+        quadrature: QuadratureBase,
+        basis: BasisBase,
+    ):
+        ndof_per_node = 1
+        super().__init__(
+            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+        )
+        self.fun_vals = None
         return
+
+    @time_this
+    def compute_rhs(self):
+        # Compute element rhs vector -> rhs_e
+        self._compute_element_rhs(self.rhs_e)
+
+        # Assemble the global rhs vector -> rhs
+        self._assemble_rhs(self.rhs_e, self.rhs)
+        return self.rhs
 
     @time_this
     def compute_jacobian(self):
@@ -729,105 +479,253 @@ class Assembler:
         Return:
             K: (sparse) global Jacobian matrix
         """
-        # Compute Jacobian derivatives
-        self.Nderiv = self.basis.eval_shape_fun_deriv()
-
-        # Compute Jacobian transformation -> Jq
-        self._compute_jtrans(self.Xe, self.Nderiv, self.Jq)
-
-        # Compute Jacobian determinant -> detJq
-        self._compute_jdet(self.Jq, self.detJq)
-
-        # Compute shape function gradient -> (invJq), Ngrad
-        self._compute_basis_grad(
-            self.Jq, self.detJq, self.Nderiv, self.invJq, self.Ngrad
-        )
-
         # Compute element Jacobian -> Ke
-        self.model.compute_element_jacobian(
-            self.quadrature, self.Ngrad, self.detJq, self.Ke
-        )
+        self._compute_element_jacobian(self.Ke)
+
+        # Assemble global Jacobian -> K
         K = self._assemble_jacobian(self.Ke)
         return K
 
     @time_this
-    def apply_dirichlet_bcs(self, enforce_symmetric_K=True):
-        """
-        Apply Dirichlet boundary conditions to global Jacobian matrix and
-        right-hand-side vector. In general, the linear system with boundary
-        conditions becomes:
-
-            [Krr Krb  [ur    [fr
-             0   I  ]  u0] =  u0]
-
-        where u0 is the fixed values for Dirichlet bc, ur is the unknown states,
-        optionally, to make the system symmetric, we could move Krb to rhs:
-
-         => [Krr 0  [ur    [fr - Krb u0
-             0   I]  u0] =  u0         ]
-        """
-        # Save Krb and diagonals
-        temp = self.K[self.dof_free, :]
-        Krb = temp[:, self.dof_fixed]
-        diag = self.K.diagonal()
-
-        # Zero-out rows
-        for i in self.dof_fixed:
-            self.K.data[self.K.indptr[i] : self.K.indptr[i + 1]] = 0
-
-        # Zero-out columns
-        if enforce_symmetric_K:
-            self.K = self.K.tocsc()
-            for i in self.dof_fixed:
-                self.K.data[self.K.indptr[i] : self.K.indptr[i + 1]] = 0
-            self.K = self.K.tocsr()
-
-        # Set diagonals to 1
-        diag[self.dof_fixed] = 1.0
-        self.K.setdiag(diag)
-
-        # Remove 0
-        self.K.eliminate_zeros()
-
-        # Set rhs
-        if self.dof_fixed_vals is None:
-            self.rhs[self.dof_fixed] = 0.0
-        else:
-            self.rhs[self.dof_fixed] = self.dof_fixed_vals[:]
-            if enforce_symmetric_K:
-                self.rhs[self.dof_free] -= Krb.dot(self.dof_fixed_vals)
+    def _compute_gfun(self, Xq, fun_vals):
+        xvals = Xq[..., 0]
+        yvals = Xq[..., 1]
+        fun_vals[...] = xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
         return
 
     @time_this
-    def solve(self, K, rhs, method):
+    def _compute_element_rhs(self, rhs_e):
         """
-        Solve the linear system
+        Evaluate element-wise rhs vectors:
 
-        Args:
-            method: direct or gmres
+            rhs_e = ∑ detJq wq (gN)_q
+                    q
 
-        Return:
-            u: solution
+        Outputs:
+            rhs_e: element-wise rhs, (nelems, nnodes_per_elem * ndof_per_node)
         """
-        if method == "direct":
-            u = spsolve(K, rhs)
-        else:
-            ml = pyamg.smoothed_aggregation_solver(K)
-            M = ml.aspreconditioner()
-            u, fail = gmres(K, rhs, M=M)
-            if fail:
-                raise RuntimeError(f"GMRES failed with code {fail}")
-        return u
+        # Compute shape function and derivatives
+        N = self.basis.eval_shape_fun()
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute element mapping -> Xq
+        utils.compute_elem_interp(N, self.Xe, self.Xq)
+
+        # Allocate memory for quadrature function values
+        if self.fun_vals is None:
+            self.fun_vals = np.zeros(self.Xq.shape[0:-1])
+
+        # Evaluate function g
+        self._compute_gfun(self.Xq, self.fun_vals)
+
+        # Compute element rhs
+        wq = self.quadrature.get_weight()
+        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.fun_vals)
+        return
 
     @time_this
-    def analysis(self, method="gmres"):
+    def _compute_element_jacobian(self, Ke):
+        """
+        Evaluate element-wise Jacobian matrices
+
+            Ke = ∑ detJq wq ( NxNxT + NyNyT)_q
+                 q
+
+        Outputs:
+            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
+                ndof_per_node, nnodes_per_elem * ndof_per_node)
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        wq = self.quadrature.get_weight()
+        Ke[...] = np.einsum(
+            "iq,q,iqjl,iqkl -> ijk", self.detJq, wq, self.Ngrad, self.Ngrad
+        )
+        return
+
+
+class PlaneStress2D(ModelBase):
+    """
+    The 2-dimensional linear elasticity equation
+
+    Integral form using the principle of virtual displacement:
+    ∫ eTs dΩ = ∫uTf dΩ
+
+    where:
+        e: strain vector
+        s: stress vector
+        u: nodal displacement
+        f: nodal external force
+    """
+
+    @time_this
+    def __init__(
+        self,
+        nodes,
+        X,
+        conn,
+        dof_fixed,
+        dof_fixed_vals,
+        nodal_force,
+        quadrature: QuadratureBase,
+        basis: BasisBase,
+        E=10.0,
+        nu=0.3,
+    ):
+        # Call base class's constructor
+        ndof_per_node = 2
+        super().__init__(
+            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+        )
+
+        # Plane stress-specific variables
+        self.nodal_force = nodal_force
+        self.C = E * np.array(
+            [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
+        )
+        self.C *= 1.0 / (1.0 - nu**2)
+        n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
+        self.Be = np.zeros(
+            (
+                self.nelems,
+                self.nquads,
+                n_stress_tensor,
+                self.nnodes_per_elem * ndof_per_node,
+            )
+        )
+        return
+
+    @time_this
+    def compute_rhs(self):
+        """
+        It turns out for this problem, the rhs (before applying bcs) is just nodal force
+        """
+        self.rhs[
+            self.dof_each_node[list(self.nodal_force.keys())].flatten()
+        ] = np.array(list(self.nodal_force.values())).flatten()
+        return self.rhs
+
+    @time_this
+    def compute_jacobian(self):
+        """
+        Compute the element Jacobian (stiffness) matrices Ke and assemble the
+        global K
+
+        Return:
+            K: (sparse) global Jacobian matrix
+        """
+        # Compute element Jacobian -> Ke
+        self._compute_element_jacobian(self.Ke)
+
+        # Assemble global Jacobian -> K
+        K = self._assemble_jacobian(self.Ke)
+        return K
+
+    @time_this
+    def _compute_element_B(self, Ngrad, Be):
+        """
+        Compute element B matrix
+
+        Input:
+            Ngrad: shape function gradient, (nelems, nquads, nnodes_per_elem,
+                   ndims)
+
+        Output:
+            Be: function that maps u to strain, (nelems, ndof_per_node,
+            nnodes_per_elem * ndof_per_node)
+        """
+        Nx = Ngrad[..., 0]
+        Ny = Ngrad[..., 1]
+        Be[:, :, 0, ::2] = Nx
+        Be[:, :, 1, 1::2] = Ny
+        Be[:, :, 2, ::2] = Ny
+        Be[:, :, 2, 1::2] = Nx
+        return
+
+    @time_this
+    def _compute_element_jacobian(self, Ke):
+        """
+        Evaluate element-wise stiffness matrix Ke
+
+        ∫ eTs dΩ can be integrated numerically using quadrature:
+
+            ∫eTs dΩ ~= ∑ detJq wq eTs
+                       q
+
+        where e = Bu, s = Ce = CBu.  Then, Ke can be computed by taking the 2nd
+        order derivatives w.r.t. u:
+
+            Ke = ∑ detJq wq (BTCB)q
+                  q
+
+        Outputs:
+            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
+                ndof_per_node, nnodes_per_elem * ndof_per_node)
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute Be matrix -> Be
+        self._compute_element_B(self.Ngrad, self.Be)
+
+        wq = self.quadrature.get_weight()
+        Ke[...] = np.einsum(
+            "iq,q,iqnj,nm,iqmk->ijk", self.detJq, wq, self.Be, self.C, self.Be
+        )
+        return
+
+
+class Assembler:
+    @time_this
+    def __init__(self, model: ModelBase):
+        """
+        The finite element problem assembler.
+
+        Args:
+            model: the problem model instance
+        """
+        self.model = model
+        return
+
+    @time_this
+    def solve(self, method="gmres"):
         """
         Perform the static analysis
         """
-        self.K = self.compute_jacobian()
-        self.compute_rhs(self.rhs)
-        self.apply_dirichlet_bcs(enforce_symmetric_K=True)
-        u = self.solve(self.K, self.rhs, method)
+        # Construct the linear system
+        K = self.model.compute_jacobian()
+        rhs = self.model.compute_rhs()
+
+        # Apply Dirichlet boundary conditions
+        K, rhs = self.model.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+        # Solve the linear system
+        u = self._solve_linear_system(K, rhs, method)
         return u
 
     @time_this
@@ -855,6 +753,27 @@ class Assembler:
         # Create the contour plot
         ax.tricontourf(tri_obj, u, **kwargs)
         return
+
+    @time_this
+    def _solve_linear_system(self, K, rhs, method):
+        """
+        Solve the linear system
+
+        Args:
+            method: direct or gmres
+
+        Return:
+            u: solution
+        """
+        if method == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = gmres(K, rhs, M=M)
+            if fail:
+                raise RuntimeError(f"GMRES failed with code {fail}")
+        return u
 
 
 class ProblemCreator:
@@ -922,16 +841,4 @@ class ProblemCreator:
         for j in range(self.nelems_y):
             nodal_force[self.nodes2d[j, -1]] = [0.0, -1.0]
 
-        return (
-            self.nelems,
-            self.nelems_per_node,
-            self.nodes,
-            self.conn,
-            self.X,
-            dof_fixed,
-            nodal_force,
-        )
-
-
-if __name__ == "__main__":
-    pass
+        return self.nodes, self.conn, self.X, dof_fixed, nodal_force
