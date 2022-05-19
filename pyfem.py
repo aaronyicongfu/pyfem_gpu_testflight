@@ -306,7 +306,7 @@ class ModelBase(ABC):
     @abstractmethod
     def compute_rhs(self):
         """
-        Compute the global rhs vector
+        Compute the global rhs vector (without considering boundary conditions)
 
         Return:
             self.rhs
@@ -316,7 +316,7 @@ class ModelBase(ABC):
     @abstractmethod
     def compute_jacobian(self):
         """
-        Compute the global Jacobian matrix.
+        Compute the global Jacobian matrix (without considering boundary conditions)
 
         Return:
             K
