@@ -57,6 +57,21 @@ class QuadratureBase(ABC):
             return self.weights
 
 
+class QuadratureTriangle2D(QuadratureBase):
+    """
+    Linear triangular element only has one quadrature point (L1=1/3, L2=1/3)
+    """
+
+    @time_this
+    def __init__(self):
+        pts = np.array([[1.0 / 3, 1.0 / 3]])
+        area_element_local_coord = 0.5
+        weights = np.array([1.0])
+        weights *= area_element_local_coord  # TODO: double-check if this is correct
+        super().__init__(pts, weights)
+        return
+
+
 class QuadratureBilinear2D(QuadratureBase):
     @time_this
     def __init__(self):
@@ -151,7 +166,7 @@ class BasisBase(ABC):
 
 class BasisBilinear2D(BasisBase):
     @time_this
-    def __init__(self, quadrature):
+    def __init__(self, quadrature: QuadratureBase):
         ndims = 2
         nnodes_per_elem = 4
         super().__init__(ndims, nnodes_per_elem, quadrature)
@@ -180,6 +195,43 @@ class BasisBilinear2D(BasisBase):
             -0.25 * (1.0 + qpt[1]),
              0.25 * (1.0 - qpt[0]),
         ]
+        return shape_derivs
+
+
+class BasisTriangle2D(BasisBase):
+    """
+    Linear triangular element has 3 area coordinates L1, L2, L3 with the
+    constraint L1 + L2 + L3 = 1, hence we only consider the first two
+    independent coordinates as local coordinates.
+
+    Shape function:
+        N = [N1, N2, N3]
+        N1 = L1
+        N2 = L2
+        N3 = 1 - L1 - L2
+
+    Coordinate transformation:
+        x = L1 * x1 + L2 * x2 + (1 - L1 - L2) * x3
+        y = L1 * y1 + L2 * y2 + (1 - L1 - L2) * y3
+
+    Jacobian transformation:
+        [dx/dL1, dx/dL2  = [x1 - x3, x2 - x3
+         dy/dL1, dy/dL2]   [y1 - y3, y2 - y3]
+    """
+
+    @time_this
+    def __init__(self, quadrature: QuadratureBase):
+        ndims = 2
+        nnodes_per_elem = 3
+        super().__init__(ndims, nnodes_per_elem, quadrature)
+        return
+
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+        shape_vals = [qpt[0], qpt[1], 1 - qpt[0] - qpt[1]]
+        return shape_vals
+
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+        shape_derivs = [1.0, 0.0, 0.0, 1.0, -1.0, -1.0]
         return shape_derivs
 
 
@@ -733,19 +785,28 @@ class Assembler:
         """
         Create a 2-dimensional contour plot for a scalar variable u
         """
+        nelems = self.model.nelems
+        conn = self.model.conn
+        X = self.model.X
+        nnodes_per_elem = self.model.nnodes_per_elem
 
         # Create the triangles
-        triangles = np.zeros((2 * self.nelems, 3), dtype=int)
-        triangles[: self.nelems, 0] = self.conn[:, 0]
-        triangles[: self.nelems, 1] = self.conn[:, 1]
-        triangles[: self.nelems, 2] = self.conn[:, 2]
+        if nnodes_per_elem == 4:
+            triangles = np.zeros((2 * nelems, 3), dtype=int)
+            triangles[:nelems, 0] = conn[:, 0]
+            triangles[:nelems, 1] = conn[:, 1]
+            triangles[:nelems, 2] = conn[:, 2]
 
-        triangles[self.nelems :, 0] = self.conn[:, 0]
-        triangles[self.nelems :, 1] = self.conn[:, 2]
-        triangles[self.nelems :, 2] = self.conn[:, 3]
+            triangles[nelems:, 0] = conn[:, 0]
+            triangles[nelems:, 1] = conn[:, 2]
+            triangles[nelems:, 2] = conn[:, 3]
+        elif nnodes_per_elem == 3:
+            triangles = conn
+        else:
+            raise ValueError("unsupported element type")
 
         # Create the triangulation object
-        tri_obj = tri.Triangulation(self.X[:, 0], self.X[:, 1], triangles)
+        tri_obj = tri.Triangulation(X[:, 0], X[:, 1], triangles)
 
         # Set the aspect ratio equal
         ax.set_aspect("equal")
@@ -782,36 +843,57 @@ class ProblemCreator:
     """
 
     @time_this
-    def __init__(self, nelems_x, nelems_y):
-        self.nelems_per_node = 4
-        self.nelems_x = nelems_x
-        self.nelems_y = nelems_y
+    def __init__(self, nnodes_x, nnodes_y, element_type="quad"):
+        """
+        Set up nodes
+        """
+        nnodes = nnodes_x * nnodes_y
+        Lx = (nnodes_x - 1) / (nnodes_y - 1)
+        Ly = 1.0
+        x = np.linspace(0, Lx, nnodes_x)
+        y = np.linspace(0, Ly, nnodes_y)
+        nodes2d = np.arange(0, nnodes_y * nnodes_x).reshape((nnodes_y, nnodes_x))
 
-        self.nelems = self.nelems_x * self.nelems_y
-        self.nnodes = (self.nelems_x + 1) * (self.nelems_y + 1)
+        X = np.zeros((nnodes, 2))
+        for j in range(nnodes_y):
+            for i in range(nnodes_x):
+                X[i + j * nnodes_x, :] = x[i], y[j]
 
-        x = np.linspace(0, self.nelems_x / self.nelems_y, self.nelems_x + 1)
-        y = np.linspace(0, 1, self.nelems_y + 1)
-        nodes2d = np.arange(0, (self.nelems_y + 1) * (self.nelems_x + 1)).reshape(
-            (self.nelems_y + 1, self.nelems_x + 1)
-        )
-
-        # Set the node locations
-        X = np.zeros((self.nnodes, 2))
-        for j in range(self.nelems_y + 1):
-            for i in range(self.nelems_x + 1):
-                X[i + j * (self.nelems_x + 1), 0] = x[i]
-                X[i + j * (self.nelems_x + 1), 1] = y[j]
+        temp_nelems_x = nnodes_x - 1
+        temp_nelems_y = nnodes_y - 1
 
         # Set the connectivity
-        conn = np.zeros((self.nelems, 4), dtype=int)
-        for j in range(self.nelems_y):
-            for i in range(self.nelems_x):
-                conn[i + j * self.nelems_x, 0] = nodes2d[j, i]
-                conn[i + j * self.nelems_x, 1] = nodes2d[j, i + 1]
-                conn[i + j * self.nelems_x, 2] = nodes2d[j + 1, i + 1]
-                conn[i + j * self.nelems_x, 3] = nodes2d[j + 1, i]
+        if element_type == "quad":
+            nelems = temp_nelems_x * temp_nelems_y
+            nnodes_per_elem = 4
+            conn = np.zeros((nelems, nnodes_per_elem), dtype=int)
+            for j in range(temp_nelems_y):
+                for i in range(temp_nelems_x):
+                    conn[i + j * temp_nelems_x, 0] = nodes2d[j, i]
+                    conn[i + j * temp_nelems_x, 1] = nodes2d[j, i + 1]
+                    conn[i + j * temp_nelems_x, 2] = nodes2d[j + 1, i + 1]
+                    conn[i + j * temp_nelems_x, 3] = nodes2d[j + 1, i]
 
+        elif element_type == "tri":
+            nelems = temp_nelems_x * temp_nelems_y * 2
+            nnodes_per_elem = 3
+            conn = np.zeros((nelems, nnodes_per_elem), dtype=int)
+            for j in range(temp_nelems_y):
+                for i in range(temp_nelems_x):
+                    quad_idx = i + j * temp_nelems_x
+                    conn[2 * quad_idx, 0] = nodes2d[j, i]
+                    conn[2 * quad_idx, 1] = nodes2d[j, i + 1]
+                    conn[2 * quad_idx, 2] = nodes2d[j + 1, i + 1]
+
+                    conn[2 * quad_idx + 1, 0] = nodes2d[j + 1, i + 1]
+                    conn[2 * quad_idx + 1, 1] = nodes2d[j + 1, i]
+                    conn[2 * quad_idx + 1, 2] = nodes2d[j, i]
+
+        else:
+            raise ValueError(f"unknown element_type: {element_type}")
+
+        self.nnodes_x = nnodes_x
+        self.nnodes_y = nnodes_y
         self.nodes2d = nodes2d
         self.nodes = nodes2d.flatten()
         self.conn = conn
@@ -823,7 +905,7 @@ class ProblemCreator:
     def create_poisson_problem(self):
         # Set fixed dof
         dof_fixed = []
-        for j in range(self.nelems_y):
+        for j in range(self.nnodes_y):
             dof_fixed.append(self.nodes2d[j, 0])
             dof_fixed.append(self.nodes2d[j, -1])
         return self.nodes, self.conn, self.X, dof_fixed
@@ -832,13 +914,14 @@ class ProblemCreator:
     def create_linear_elasticity_problem(self):
         # Set fixed dof
         dof_fixed = []
-        for j in range(self.nelems_y):
+        for j in range(self.nnodes_y):
             dof_fixed.append(2 * self.nodes2d[j, 0])
             dof_fixed.append(2 * self.nodes2d[j, 0] + 1)
 
         # Set nodal force
         nodal_force = {}
-        for j in range(self.nelems_y):
-            nodal_force[self.nodes2d[j, -1]] = [0.0, -1.0]
+        # for j in range(self.nnodes_y):
+        #     nodal_force[self.nodes2d[j, -1]] = [0.0, -1.0]
+        nodal_force[self.nodes2d[0, -1]] = [0.0, -1.0]
 
         return self.nodes, self.conn, self.X, dof_fixed, nodal_force
