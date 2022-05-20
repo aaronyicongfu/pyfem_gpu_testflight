@@ -1,2 +1,3 @@
 *.out
 *.vtk
+__pycache__
