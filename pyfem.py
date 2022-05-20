@@ -67,7 +67,7 @@ class QuadratureTriangle2D(QuadratureBase):
         pts = np.array([[1.0 / 3, 1.0 / 3]])
         area_element_local_coord = 0.5
         weights = np.array([1.0])
-        weights *= area_element_local_coord  # TODO: double-check if this is correct
+        weights *= area_element_local_coord  # TODO: I think numbering order also matters here...
         super().__init__(pts, weights)
         return
 
@@ -287,8 +287,9 @@ class ModelBase(ABC):
         assert len(self.nodes) == len(set(self.nodes))  # no-duplicate check
 
         # Sanity check: conn
-        assert self.conn.flatten().min() == 0
-        assert self.conn.flatten().max() == self.nodes.shape[0] - 1
+        assert self.conn.min() == 0
+        assert self.conn.max() == self.nodes.shape[0] - 1
+        assert len(set(self.conn.flatten())) == self.nnodes
 
         """
         Compute dof information
