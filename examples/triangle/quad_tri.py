@@ -7,6 +7,7 @@ import sys
 sys.path.append("../..")
 import pyfem
 import matplotlib.pyplot as plt
+import utils
 
 
 def run_problem(element_type):
@@ -42,6 +43,9 @@ def run_problem(element_type):
     ux = u[0::2]  # Extract x-directional nodal displacement
     uy = u[1::2]  # Extract y-directional nodal displacement
     umag = (ux**2 + uy**2) ** 0.5
+
+    # Save the mesh and solution to vtk
+    utils.to_vtk(nodes, conn, X, {"ux": ux, "uy": uy}, vtk_name=f"{element_type}.vtk")
     return umag, assembler
 
 
