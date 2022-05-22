@@ -1,8 +1,9 @@
-from curses import raw
 import os
+from posixpath import abspath
 import numpy as np
 import argparse
 import re
+import utils
 
 
 class InpParser:
@@ -89,6 +90,29 @@ class InpParser:
         self.X = X
         self.groups = groups
         return nodes, conn, X, groups
+
+    def to_vtk(self, nodal_sol={}, vtk_name=None):
+        """
+        Generate a vtk file for mesh and optionally solution
+
+        Inputs:
+            nodal_sol: nodal solution values, dictionary with the following
+                        structure:
+
+                        nodal_sol = {
+                            "scalar1": [...],
+                            "scalar2": [...],
+                            ...
+                        }
+            vtk_name: name of the vtk
+        """
+        if self.nodes is None:
+            self.parse()
+
+        if vtk_name is None:
+            vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
+        utils.to_vtk(self.nodes, self.conn, self.X, nodal_sol, vtk_name)
+        return
 
     def _sort_B_by_A(self, A, B):
         A, B = zip(*sorted(zip(A, B)))
@@ -209,76 +233,6 @@ class InpParser:
 
             # Update data
             chunk["data"] = data
-        return
-
-    def to_vtk(self, nodal_sol={}, vtk_name=None):
-        """
-        Generate a vtk from inp.
-
-        Inputs:
-            nodal_sol: nodal solution values, dictionary with the following
-                       structure:
-
-                       nodal_sol = {
-                           "scalar1": [...],
-                           "scalar2": [...],
-                            ...
-                       }
-
-            vtk_name: name of the vtk, if
-        """
-        if self.nodes is None:
-            self.parse()
-
-        if vtk_name is None:
-            vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
-
-        nnodes = len(self.nodes)
-        nelems = np.sum([len(c) for c in self.conn.values()])
-
-        # Create a empty vtk file and write headers
-        with open(vtk_name, "w") as fh:
-            fh.write("# vtk DataFile Version 3.0\n")
-            fh.write("my example\n")
-            fh.write("ASCII\n")
-            fh.write("DATASET UNSTRUCTURED_GRID\n")
-
-            # Write nodal points
-            fh.write("POINTS {:d} double\n".format(nnodes))
-            for x in self.X:
-                row = f"{x}"[1:-1]
-                fh.write(f"{row}\n")
-
-            # Write connectivity
-            size = np.sum(
-                [
-                    len(econn) * (1 + self.SUPPORTED_ELEMENT[etype]["nnode"])
-                    for etype, econn in self.conn.items()
-                ]
-            )
-            fh.write(f"CELLS {nelems} {size}\n")
-            for etype, econn in self.conn.items():
-                for c in econn:
-                    node_idx = f"{c}"[1:-1]  # remove square bracket [ and ]
-                    npts = self.SUPPORTED_ELEMENT[etype]["nnode"]
-                    fh.write(f"{npts} {node_idx}\n")
-
-            # Write cell type
-            fh.write(f"CELL_TYPES {nelems}\n")
-            for etype, econn in self.conn.items():
-                for c in econn:
-                    vtk_type = self.SUPPORTED_ELEMENT[etype]["vtk_type"]
-                    fh.write(f"{vtk_type}\n")
-
-            # Write solution
-            if nodal_sol:
-                fh.write(f"POINT_DATA {nnodes}\n")
-                for name, data in nodal_sol.items():
-                    fh.write(f"SCALARS {name} float 1\n")
-                    fh.write("LOOKUP_TABLE default\n")
-                    for val in data:
-                        fh.write(f"{val}\n")
-        print(f"[Info] Done generating {vtk_name}")
         return
 
 
