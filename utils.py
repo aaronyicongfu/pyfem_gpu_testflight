@@ -5,30 +5,40 @@ from time import perf_counter_ns
 import numpy as np
 
 
-def time_this(func):
-    """
-    Decorator: time the execution of a function
-    """
-    tab = "    "
-    time_this.counter = 0  # a "static" variable
-    fun_name = func.__qualname__
+class MyLogger:
+    counter = 0  # a static variable
+    print_to_stdout = True
 
-    def wrapper(*args, **kwargs):
-        info_str = f"{tab*time_this.counter}{fun_name}() called"
-        print(f"[timer] {info_str:<40s}")
-        time_this.counter += 1
-        t0 = perf_counter_ns()
-        ret = func(*args, **kwargs)
-        t1 = perf_counter_ns()
-        time_this.counter -= 1
-        info_str = f"{tab*time_this.counter}{fun_name}() return"
-        print(
-            f"[timer] {info_str:<80s}",
-            f"({(t1 - t0) / 1e6:.2f} ms)",
-        )
-        return ret
+    @staticmethod
+    def time_this(func):
+        """
+        Decorator: time the execution of a function
+        """
+        tab = "    "
+        fun_name = func.__qualname__
 
-    return wrapper
+        def wrapper(*args, **kwargs):
+            info_str = f"{tab*MyLogger.counter}{fun_name}() called"
+            if MyLogger.print_to_stdout:
+                print(f"[timer] {info_str:<40s}")
+            MyLogger.counter += 1
+            t0 = perf_counter_ns()
+            ret = func(*args, **kwargs)
+            t1 = perf_counter_ns()
+            t_elapse = (t1 - t0) / 1e6  # unit: ms
+            MyLogger.counter -= 1
+            info_str = f"{tab*MyLogger.counter}{fun_name}() return"
+            if MyLogger.print_to_stdout:
+                print(
+                    f"[timer] {info_str:<80s}",
+                    f"({t_elapse:.2f} ms)",
+                )
+            return ret
+
+        return wrapper
+
+
+time_this = MyLogger.time_this
 
 
 @time_this

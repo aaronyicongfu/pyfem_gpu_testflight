@@ -10,7 +10,7 @@ import pyfem
 import utils
 
 # Set up the meshing utility and create the problem mesh
-creator = pyfem.ProblemCreator(16, 16, 8, element_type="block")
+creator = pyfem.ProblemCreator(32, 8, 8, element_type="block")
 nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 # Set up 3-dimensional block quadrature and basis
@@ -34,3 +34,6 @@ uz = u[2::3]
 sol = {"ux": ux, "uy": uy, "uz": uz}
 
 utils.to_vtk(nodes, conn, X, sol)
+
+print("summary")
+print(f"ndof: {len(u)}")
