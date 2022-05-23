@@ -1,6 +1,6 @@
 """
-This script shows how to perform a static, 2-dimensional plane stress analysis
-on a mesh from abaqus input file.
+This script shows how to perform a static, 2-dimensional linear elasticity
+analysis on a mesh from abaqus input file.
 """
 import sys
 from os.path import abspath, join, dirname
@@ -34,7 +34,7 @@ if __name__ == "__main__":
     basis = pyfem.BasisTriangle2D(quadrature)
 
     # Create the 2-dimensional plane stress physical model
-    model = pyfem.PlaneStress2D(
+    model = pyfem.LinearElasticity(
         nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
     )
 

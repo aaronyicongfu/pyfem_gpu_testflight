@@ -31,7 +31,7 @@ def run_problem(element_type):
         basis = pyfem.BasisTriangle2D(quadrature)
 
     # Create the physical model
-    model = pyfem.PlaneStress2D(
+    model = pyfem.LinearElasticity(
         nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
     )
     assembler = pyfem.Assembler(model)

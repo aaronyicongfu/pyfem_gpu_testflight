@@ -126,7 +126,20 @@ def compute_basis_grad(Jq, detJq, Nderiv, invJq, Ngrad):
         invJq[..., 1, 0] = -Jq[..., 1, 0] / detJq
         invJq[..., 1, 1] = Jq[..., 0, 0] / detJq
     else:
-        raise NotImplementedError
+        # fmt: off
+        invJq[..., 0, 0] =  (Jq[..., 1, 1] * Jq[..., 2, 2] - Jq[..., 1, 2] * Jq[..., 2, 1]) / detJq
+        invJq[..., 0, 1] = -(Jq[..., 0, 1] * Jq[..., 2, 2] - Jq[..., 0, 2] * Jq[..., 2, 1]) / detJq
+        invJq[..., 0, 2] =  (Jq[..., 0, 1] * Jq[..., 1, 2] - Jq[..., 0, 2] * Jq[..., 1, 1]) / detJq
+
+        invJq[..., 1, 0] = -(Jq[..., 1, 0] * Jq[..., 2, 2] - Jq[..., 1, 2] * Jq[..., 2, 0]) / detJq
+        invJq[..., 1, 1] =  (Jq[..., 0, 0] * Jq[..., 2, 2] - Jq[..., 0, 2] * Jq[..., 2, 0]) / detJq
+        invJq[..., 1, 2] = -(Jq[..., 0, 0] * Jq[..., 1, 2] - Jq[..., 0, 2] * Jq[..., 1, 0]) / detJq
+
+        invJq[..., 2, 0] =  (Jq[..., 1, 0] * Jq[..., 2, 1] - Jq[..., 1, 1] * Jq[..., 2, 0]) / detJq
+        invJq[..., 2, 1] = -(Jq[..., 0, 0] * Jq[..., 2, 1] - Jq[..., 0, 1] * Jq[..., 2, 0]) / detJq
+        invJq[..., 2, 2] =  (Jq[..., 0, 0] * Jq[..., 1, 1] - Jq[..., 0, 1] * Jq[..., 1, 0]) / detJq
+        # fmt: on
+
     Ngrad[:, :, :, :] = np.einsum("jkm, ijml -> ijkl", Nderiv, invJq)
     return
 

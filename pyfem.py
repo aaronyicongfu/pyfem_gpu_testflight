@@ -86,6 +86,24 @@ class QuadratureBilinear2D(QuadratureBase):
         return
 
 
+class QuadratureBlock3D(QuadratureBase):
+    @time_this
+    def __init__(self):
+        # fmt: off
+        pts = np.array([[-1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [-1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
+                        [-1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [-1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
+                        [+1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [+1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)],
+                        [+1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0), -1.0 / np.sqrt(3.0)],
+                        [+1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0),  1.0 / np.sqrt(3.0)]])
+        # fmt: on
+        weights = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+        super().__init__(pts, weights)
+        return
+
+
 class BasisBase(ABC):
     """
     Abstract class for the element basis function
@@ -194,6 +212,60 @@ class BasisBilinear2D(BasisBase):
              0.25 * (1.0 + qpt[0]),
             -0.25 * (1.0 + qpt[1]),
              0.25 * (1.0 - qpt[0]),
+        ]
+        return shape_derivs
+
+
+class BasisBlock3D(BasisBase):
+    @time_this
+    def __init__(self, quadrature: QuadratureBase):
+        ndims = 3
+        nnodes_per_elem = 8
+        super().__init__(ndims, nnodes_per_elem, quadrature)
+        return
+
+    @time_this
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+        shape_vals = [
+            0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]) * (1.0 - qpt[2]),
+            0.125 * (1.0 + qpt[0]) * (1.0 - qpt[1]) * (1.0 - qpt[2]),
+            0.125 * (1.0 + qpt[0]) * (1.0 + qpt[1]) * (1.0 - qpt[2]),
+            0.125 * (1.0 - qpt[0]) * (1.0 + qpt[1]) * (1.0 - qpt[2]),
+            0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]) * (1.0 + qpt[2]),
+            0.125 * (1.0 + qpt[0]) * (1.0 - qpt[1]) * (1.0 + qpt[2]),
+            0.125 * (1.0 + qpt[0]) * (1.0 + qpt[1]) * (1.0 + qpt[2]),
+            0.125 * (1.0 - qpt[0]) * (1.0 + qpt[1]) * (1.0 + qpt[2]),
+        ]
+        return shape_vals
+
+    @time_this
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+        shape_derivs = [
+            # fmt: off
+            -0.125 * (1.0 - qpt[1]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 - qpt[0]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
+             0.125 * (1.0 - qpt[1]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 + qpt[0]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 + qpt[0]) * (1.0 - qpt[1]),
+             0.125 * (1.0 + qpt[1]) * (1.0 - qpt[2]),
+             0.125 * (1.0 + qpt[0]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 + qpt[0]) * (1.0 + qpt[1]),
+            -0.125 * (1.0 + qpt[1]) * (1.0 - qpt[2]),
+             0.125 * (1.0 - qpt[0]) * (1.0 - qpt[2]),
+            -0.125 * (1.0 - qpt[0]) * (1.0 + qpt[1]),
+            -0.125 * (1.0 - qpt[1]) * (1.0 + qpt[2]),
+            -0.125 * (1.0 - qpt[0]) * (1.0 + qpt[2]),
+             0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
+             0.125 * (1.0 - qpt[1]) * (1.0 + qpt[2]),
+            -0.125 * (1.0 + qpt[0]) * (1.0 + qpt[2]),
+             0.125 * (1.0 + qpt[0]) * (1.0 - qpt[1]),
+             0.125 * (1.0 + qpt[1]) * (1.0 + qpt[2]),
+             0.125 * (1.0 + qpt[0]) * (1.0 + qpt[2]),
+             0.125 * (1.0 + qpt[0]) * (1.0 + qpt[1]),
+            -0.125 * (1.0 + qpt[1]) * (1.0 + qpt[2]),
+             0.125 * (1.0 - qpt[0]) * (1.0 + qpt[2]),
+             0.125 * (1.0 - qpt[0]) * (1.0 + qpt[1]),
         ]
         return shape_derivs
 
@@ -613,9 +685,10 @@ class LinearPoisson2D(ModelBase):
         return
 
 
-class PlaneStress2D(ModelBase):
+class LinearElasticity(ModelBase):
     """
-    The 2-dimensional linear elasticity equation
+    The linear elasticity equation, if is 2-dimensional problem, then plane
+    stress condition is assumed
 
     Integral form using the principle of virtual displacement:
     ∫ eTs dΩ = ∫uTf dΩ
@@ -641,18 +714,30 @@ class PlaneStress2D(ModelBase):
         E=10.0,
         nu=0.3,
     ):
+        # Infer the problem dimensions
+        ndof_per_node = X.shape[1]
+
         # Call base class's constructor
-        ndof_per_node = 2
         super().__init__(
             ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
 
         # Plane stress-specific variables
         self.nodal_force = nodal_force
-        self.C = E * np.array(
-            [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
-        )
-        self.C *= 1.0 / (1.0 - nu**2)
+
+        if ndof_per_node == 2:
+            self.C = E * np.array(
+                [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
+            )
+            self.C *= 1.0 / (1.0 - nu**2)
+        else:
+            self.C = np.zeros((6, 6))
+            self.C[0, 0] = self.C[1, 1] = self.C[2, 2] = 1 - nu
+            self.C[0, 1] = self.C[0, 2] = self.C[1, 0] = nu
+            self.C[1, 2] = self.C[2, 0] = self.C[2, 1] = nu
+            self.C[3, 3] = self.C[4, 4] = self.C[5, 5] = 0.5 - nu
+            self.C *= E / (1 + nu) * (1 - 2 * nu)
+
         n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
         self.Be = np.zeros(
             (
@@ -700,15 +785,34 @@ class PlaneStress2D(ModelBase):
                    ndims)
 
         Output:
-            Be: function that maps u to strain, (nelems, ndof_per_node,
+            Be: function that maps u to strain, (nelems, nquads, ndof_per_node,
             nnodes_per_elem * ndof_per_node)
         """
-        Nx = Ngrad[..., 0]
-        Ny = Ngrad[..., 1]
-        Be[:, :, 0, ::2] = Nx
-        Be[:, :, 1, 1::2] = Ny
-        Be[:, :, 2, ::2] = Ny
-        Be[:, :, 2, 1::2] = Nx
+        if self.ndims == 2:
+            Nx = Ngrad[:, :, :, 0]
+            Ny = Ngrad[:, :, :, 1]
+            Be[:, :, 0, ::2] = Nx
+            Be[:, :, 1, 1::2] = Ny
+            Be[:, :, 2, ::2] = Ny
+            Be[:, :, 2, 1::2] = Nx
+
+        elif self.ndims == 3:
+            Nx = Ngrad[:, :, :, 0]
+            Ny = Ngrad[:, :, :, 1]
+            Nz = Ngrad[:, :, :, 2]
+            Be[:, :, 0, 0::3] = Nx
+            Be[:, :, 1, 1::3] = Ny
+            Be[:, :, 2, 2::3] = Nz
+
+            Be[:, :, 3, 0::3] = Ny
+            Be[:, :, 3, 1::3] = Nx
+
+            Be[:, :, 4, 1::3] = Nz
+            Be[:, :, 4, 2::3] = Ny
+
+            Be[:, :, 5, 0::3] = Nz
+            Be[:, :, 5, 2::3] = Nx
+
         return
 
     @time_this
@@ -844,24 +948,47 @@ class ProblemCreator:
     """
 
     @time_this
-    def __init__(self, nnodes_x, nnodes_y, element_type="quad"):
+    def __init__(self, nnodes_x, nnodes_y, nnodes_z=None, element_type="quad"):
         """
-        Set up nodes
+        Create a 2d problem instance if nnodes_z is None, otherwise create a
+        3d problem instance.
+
+        Inputs:
+            nnodes_x, nnodes_y, nnodes_z: number of nodes in x, y, (z) directions
+            element_type: type of the finite element, currently the following
+                          types are supported:
+                              - tri: 2d 3-node triangle
+                              - quad: 2d 4-node quadrilateral
+                              - block: 3d 8-node hexahedron
         """
-        nnodes = nnodes_x * nnodes_y
+        # Set problem dimension and check inputs
+        if nnodes_z is None:
+            self.ndims = 2
+            nnodes_z = 1
+            assert element_type == "quad" or element_type == "tri"
+        else:
+            self.ndims = 3
+            assert element_type == "block"
+
+        nnodes = nnodes_x * nnodes_y * nnodes_z
         Lx = (nnodes_x - 1) / (nnodes_y - 1)
         Ly = 1.0
+        Lz = (nnodes_z - 1) / (nnodes_y - 1)
         x = np.linspace(0, Lx, nnodes_x)
         y = np.linspace(0, Ly, nnodes_y)
-        nodes2d = np.arange(0, nnodes_y * nnodes_x).reshape((nnodes_y, nnodes_x))
-
-        X = np.zeros((nnodes, 2))
-        for j in range(nnodes_y):
-            for i in range(nnodes_x):
-                X[i + j * nnodes_x, :] = x[i], y[j]
+        z = np.linspace(0, Lz, nnodes_z)
+        nodes3d = np.arange(0, nnodes_x * nnodes_y * nnodes_z).reshape(
+            (nnodes_z, nnodes_y, nnodes_x)
+        )
+        X = np.zeros((nnodes, 3))
+        for k in range(nnodes_z):
+            for j in range(nnodes_y):
+                for i in range(nnodes_x):
+                    X[i + j * nnodes_x + k * nnodes_x * nnodes_y, :] = x[i], y[j], z[k]
 
         temp_nelems_x = nnodes_x - 1
         temp_nelems_y = nnodes_y - 1
+        temp_nelems_z = nnodes_z - 1
 
         # Set the connectivity
         if element_type == "quad":
@@ -870,10 +997,10 @@ class ProblemCreator:
             conn = np.zeros((nelems, nnodes_per_elem), dtype=int)
             for j in range(temp_nelems_y):
                 for i in range(temp_nelems_x):
-                    conn[i + j * temp_nelems_x, 0] = nodes2d[j, i]
-                    conn[i + j * temp_nelems_x, 1] = nodes2d[j, i + 1]
-                    conn[i + j * temp_nelems_x, 2] = nodes2d[j + 1, i + 1]
-                    conn[i + j * temp_nelems_x, 3] = nodes2d[j + 1, i]
+                    conn[i + j * temp_nelems_x, 0] = nodes3d[0, j, i]
+                    conn[i + j * temp_nelems_x, 1] = nodes3d[0, j, i + 1]
+                    conn[i + j * temp_nelems_x, 2] = nodes3d[0, j + 1, i + 1]
+                    conn[i + j * temp_nelems_x, 3] = nodes3d[0, j + 1, i]
 
         elif element_type == "tri":
             nelems = temp_nelems_x * temp_nelems_y * 2
@@ -882,23 +1009,42 @@ class ProblemCreator:
             for j in range(temp_nelems_y):
                 for i in range(temp_nelems_x):
                     quad_idx = i + j * temp_nelems_x
-                    conn[2 * quad_idx, 0] = nodes2d[j, i]
-                    conn[2 * quad_idx, 1] = nodes2d[j, i + 1]
-                    conn[2 * quad_idx, 2] = nodes2d[j + 1, i + 1]
+                    conn[2 * quad_idx, 0] = nodes3d[0, j, i]
+                    conn[2 * quad_idx, 1] = nodes3d[0, j, i + 1]
+                    conn[2 * quad_idx, 2] = nodes3d[0, j + 1, i + 1]
 
-                    conn[2 * quad_idx + 1, 0] = nodes2d[j + 1, i + 1]
-                    conn[2 * quad_idx + 1, 1] = nodes2d[j + 1, i]
-                    conn[2 * quad_idx + 1, 2] = nodes2d[j, i]
+                    conn[2 * quad_idx + 1, 0] = nodes3d[0, j + 1, i + 1]
+                    conn[2 * quad_idx + 1, 1] = nodes3d[0, j + 1, i]
+                    conn[2 * quad_idx + 1, 2] = nodes3d[0, j, i]
+
+        elif element_type == "block":
+            nelems = temp_nelems_x * temp_nelems_y * temp_nelems_z
+            nnodes_per_elem = 8
+            conn = np.zeros((nelems, nnodes_per_elem), dtype=int)
+            for k in range(temp_nelems_z):
+                for j in range(temp_nelems_y):
+                    for i in range(temp_nelems_x):
+                        # fmt: off
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 0] = nodes3d[k, j, i]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 1] = nodes3d[k, j, i + 1]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 2] = nodes3d[k, j + 1, i + 1]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 3] = nodes3d[k, j + 1, i]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 4] = nodes3d[k + 1, j, i]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 5] = nodes3d[k + 1, j, i + 1]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 6] = nodes3d[k + 1, j + 1, i + 1]
+                        conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 7] = nodes3d[k + 1, j + 1, i]
+                        # fmt: on
 
         else:
             raise ValueError(f"unknown element_type: {element_type}")
 
         self.nnodes_x = nnodes_x
         self.nnodes_y = nnodes_y
-        self.nodes2d = nodes2d
-        self.nodes = nodes2d.flatten()
+        self.nnodes_z = nnodes_z
+        self.nodes3d = nodes3d
+        self.nodes = nodes3d.flatten()
         self.conn = conn
-        self.X = X
+        self.X = X[:, 0 : self.ndims]
 
         return
 
@@ -906,23 +1052,26 @@ class ProblemCreator:
     def create_poisson_problem(self):
         # Set fixed dof
         dof_fixed = []
-        for j in range(self.nnodes_y):
-            dof_fixed.append(self.nodes2d[j, 0])
-            dof_fixed.append(self.nodes2d[j, -1])
+        for k in range(self.nnodes_z):
+            for j in range(self.nnodes_y):
+                dof_fixed.append(self.nodes3d[k, j, 0])
+                dof_fixed.append(self.nodes3d[k, j, -1])
         return self.nodes, self.conn, self.X, dof_fixed
 
     @time_this
     def create_linear_elasticity_problem(self):
         # Set fixed dof
         dof_fixed = []
-        for j in range(self.nnodes_y):
-            dof_fixed.append(2 * self.nodes2d[j, 0])
-            dof_fixed.append(2 * self.nodes2d[j, 0] + 1)
+        for k in range(self.nnodes_z):
+            for j in range(self.nnodes_y):
+                for n in range(self.ndims):
+                    dof_fixed.append(self.ndims * self.nodes3d[k, j, 0] + n)
 
         # Set nodal force
         nodal_force = {}
-        # for j in range(self.nnodes_y):
-        #     nodal_force[self.nodes2d[j, -1]] = [0.0, -1.0]
-        nodal_force[self.nodes2d[0, -1]] = [0.0, -1.0]
+        for k in range(self.nnodes_z):
+            for j in range(self.nnodes_y):
+                nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
+            # nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
 
         return self.nodes, self.conn, self.X, dof_fixed, nodal_force

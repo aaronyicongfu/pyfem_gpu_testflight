@@ -32,7 +32,7 @@ class PlaneStressCase(unittest.TestCase):
         ) = creator.create_linear_elasticity_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.PlaneStress2D(
+        model = pyfem.LinearElasticity(
             nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
         )
         assembler = pyfem.Assembler(model)
