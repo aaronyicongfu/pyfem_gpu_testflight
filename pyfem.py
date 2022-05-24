@@ -1,5 +1,6 @@
 import numpy as np
 from scipy import sparse
+from scipy import special
 from scipy.sparse.linalg import spsolve, gmres
 from abc import ABC, abstractmethod
 import matplotlib.tri as tri
@@ -560,6 +561,321 @@ class LinearPoisson2D(ModelBase):
         return
 
 
+class NonlinearPoisson2D(ModelBase):
+    """
+    The 2-dimensional Nonlinear Poisson equation
+
+    Equation:
+    - grad . (h(x)(1.0 + u^2) grad(u))) = g
+
+    Boundary condition:
+    u = u0 on ∂Ω
+
+    Weak form:
+    ∫ h(x)(1.0 + uq^2) ∇uq ∇vq dΩ = ∫gvq dΩ for test function ve
+
+    Residual:
+    R(x, u) = ∫ h(x)(1.0 + uq^2) ue.T B.T B ue - g N dΩ = 0 for test function ve
+
+    where:
+        uq = N * ue,
+        vq = N * ve,
+        ∇uq = ∇N * ue = B * ue,
+        ∇vq = ∇N * ve = B * ve,
+        B = ∇N = "Ngrad"
+    """
+
+    @time_this
+    def __init__(
+        self,
+        nodes,
+        X,
+        conn,
+        dof_fixed,
+        dof_fixed_vals,
+        quadrature: QuadratureBase,
+        basis: BasisBase,
+    ):
+        ndof_per_node = 1
+        super().__init__(
+            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+        )
+        self.gfun_vals = None
+        self.hfun_vals = None
+        self.Re = None
+        return
+
+    @time_this
+    def compute_rhs(self):
+        # Compute element rhs vector -> rhs_e
+        self._compute_element_rhs(self.rhs_e)
+
+        # Assemble the global rhs vector -> rhs
+        self._assemble_rhs(self.rhs_e, self.rhs)
+        return self.rhs
+
+    @time_this
+    def compute_jacobian(self, xdv, u):
+        """
+        Compute the element Jacobian (stiffness) matrices Ke and assemble the
+        global K
+
+        Return:
+            K: (sparse) global Jacobian matrix
+        """
+        # Compute element Jacobian -> Ke
+        self._compute_element_jacobian(xdv, u, self.Ke)
+
+        # Assemble global Jacobian -> K
+        K = self._assemble_jacobian(self.Ke)
+        return K
+
+    @time_this
+    def compute_residual(self, xdv, u):
+        """
+        Compute the element residual vectors and assemble the global residual
+        vector
+
+        Inputs:
+            u: (ndarray) global solution vector
+
+        Return:
+            r: (ndarray) global residual vector
+        """
+        # Compute element residual -> Re
+        self._compute_element_residual(xdv, u, self.Re)
+
+        # Assemble the global residual vector -> R
+        R = np.zeros(self.nnodes)
+        for i in range(self.nnodes_per_elem):
+            np.add.at(R, self.conn[:, i], self.Re[:, i])
+        return R
+
+    @time_this
+    def _compute_gfun(self, Xq, gfun_vals):
+        """
+        Args:
+            Xq: quadrature location in 1st and 2nd global coordinates
+
+        Returns:
+            gfun_vals: g function values for each quadrature, (nelems, nquads)
+        """
+        xvals = Xq[..., 0]
+        yvals = Xq[..., 1]
+        gfun_vals[...] = (
+            1e4
+            * xvals
+            * (1.0 - xvals)
+            * (1.0 - 2.0 * xvals)
+            * yvals
+            * (1.0 - yvals)
+            * (1.0 - 2.0 * yvals)
+        )
+        return
+
+    @time_this
+    def _compute_hfun(self, xdv, Xq, hfun_vals):
+        """
+        Given the x and y locations return the right-hand-side
+
+        Args:
+            xdv: The design variable values
+            Xq: quadrature location in 1st and 2nd global coordinates
+
+        Returns:
+            hfun_vals: h function values for each quadrature, (nelems, nquads)
+        """
+        xvals = Xq[..., 0]
+        yvals = Xq[..., 1]
+        num_x_vals = np.shape(xdv)[0]
+        hfun_vals = np.ones(xvals.shape)
+        for k in range(num_x_vals):
+            coef = special.binom(num_x_vals - 1, k)
+            xarg = coef * (1.0 - xvals) ** (num_x_vals - 1 - k) * xvals**k
+            yarg = 4.0 * yvals * (1.0 - yvals)
+            hfun_vals += xdv[k] * xarg * yarg
+
+        return
+
+    @time_this
+    def _compute_element_rhs(self, rhs_e):
+        """
+        Evaluate element-wise rhs vectors:
+
+            rhs_e = ∑ detJq wq (gN)_q
+
+        Args:
+            N: shape function values, (nnodes_per_elem, nquads)
+            Nderiv: shape function derivatives, (nnodes_per_elem, ndims, nquads)
+            detJq: Jacobian determinants, (nelems, nquads)
+            Xq: quadrature location in global coordinates, (nelems, nquads, ndims)
+            wq: quadrature weights, (nelems, nquads)
+            gfun_vals: g function values for each quadrature, (nelems, nquads)
+            hfun_vals: h function values for each quadrature, (nelems, nquads)
+
+        Outputs:
+            rhs_e: element-wise rhs, (nelems, nnodes_per_elem * nvars_per_node)
+        """
+        # Compute shape function and derivatives
+        N = self.basis.eval_shape_fun()
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute element mapping -> Xq
+        utils.compute_elem_interp(N, self.Xe, self.Xq)
+
+        # Allocate memory for quadrature function values
+        if self.gfun_vals is None:
+            self.gfun_vals = np.zeros(self.Xq.shape[0:-1])
+
+        # Evaluate function g
+        self._compute_gfun(self.Xq, self.gfun_vals)
+
+        # Compute element rhs
+        wq = self.quadrature.get_weight()
+        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.gfun_vals)
+        return
+
+    @time_this
+    def _compute_element_jacobian(self, num_x_vals, xdv, u, Ke):
+        """
+        Evaluate element-wise Jacobian matrices:
+        Args:
+            xdv: The design variable values
+            u: The current solution vector
+
+        Outputs:
+            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
+                nvars_per_node, nnodes_per_elem * nvars_per_node)
+
+            h(x)(1.0 + uq^2) ∇uq ∇vq = h(x)(1.0 + uq^2) ue.T B.T B ve = Ke ve
+            Ke =  h(x)(1.0 + uq^2) B.T B + 2.0 h(x) ue B.T B uq
+
+        where:
+            uq = N * ue,
+            vq = N * ve,
+            ∇uq = ∇N * ue = B * ue,
+            ∇vq = ∇N * ve = B * ve,
+            B = ∇N = "Ngrad"
+        """
+        # Compute shape function and derivatives
+        N = self.basis.eval_shape_fun()
+
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute element mapping u -> ue -> uq
+        ue = np.zeros((self.nelems, self.nnodes_per_elem))
+        uq = np.zeros((self.nelems, self.nnodes_per_elem))
+        utils.scatter_node_to_elem(self.conn, u, ue)
+        utils.compute_elem_interp(N, ue, uq)
+
+        # Allocate memory for quadrature function values
+        if self.hfun_vals is None:
+            self.hfun_vals = np.zeros(self.Xq.shape[0:-1])
+
+        # Evaluate function h
+        self._compute_hfun(xdv, self.Xq, self.hfun_vals)
+
+        wq = self.quadrature.get_weight()
+        Ke = np.einsum(
+            "nq,q,nqjl,nqkl -> njk",
+            self.detJq * self.hfun_vals * (1.0 + uq**2),
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+        )
+        Ke += np.einsum(
+            "nq,q,nqjl,nqkl,ik -> nji",  # TODO, change ik to ki
+            2.0 * self.detJq * self.hfun_vals * uq,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            uq,
+        )
+        return
+
+    @time_this
+    def _compute_element_residual(self, xdv, u, Re):
+        """
+        Evaluate element-wise residual matrices:
+        Args:
+            xdv: The design variable values
+            u: The current solution vector
+
+        Outputs:
+            Residual:
+            R(x, u) = ∫ h(x)(1.0 + uq^2) ue.T B.T B ue - g N dΩ = 0 for test function ve
+
+            where:
+                uq = N * ue,
+                vq = N * ve,
+                ∇uq = ∇N * ue = B * ue,
+                ∇vq = ∇N * ve = B * ve,
+                B = ∇N = "Ngrad"
+        """
+        # Compute shape function and derivatives
+        N = self.basis.eval_shape_fun()
+
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute element mapping u -> ue -> uq
+        ue = np.zeros((self.nelems, self.nnodes_per_elem))
+        uq = np.zeros((self.nelems, self.nnodes_per_elem))
+        utils.scatter_node_to_elem(self.conn, u, ue)
+        utils.compute_elem_interp(N, ue, uq)
+
+        # Allocate memory for quadrature function values
+        if self.hfun_vals is None:
+            self.hfun_vals = np.zeros(self.Xq.shape[0:-1])
+
+        # Evaluate function h
+        self._compute_hfun(xdv, self.Xq, self.hfun_vals)
+
+        wq = self.quadrature.get_weight()
+
+        # Compute left hand side
+        lhs_e = np.einsum(
+            "nq,q,nqjl,nqkl,nk -> nj",
+            self.detJq * self.hfun_vals * (1.0 + uq**2),
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            ue,
+        )
+
+        # Compute right-hand side
+        self._compute_element_rhs(self.rhs_e)
+
+        # Compute residual
+        Re = lhs_e - self.rhs_e
+        return
+
+
 class PlaneStress2D(ModelBase):
     """
     The 2-dimensional linear elasticity equation
@@ -713,11 +1029,18 @@ class Assembler:
         return
 
     @time_this
-    def solve(self, method="gmres"):
+    def solve(self, method="gmres", nonlinear=False, num=10):
         """
         Perform the static analysis
         """
-        # Construct the linear system
+        # # Construct the linear system
+        # if nonlinear:
+        #     num = min(10, max(num, 2))
+        #     xdv = np.ones(num)/num
+        #     u = np.ones(self.model.nnodes)
+        #     K = self.model.compute_jacobian(xdv, u)
+        #     rhs = self.model.compute_rhs()
+
         K = self.model.compute_jacobian()
         rhs = self.model.compute_rhs()
 
