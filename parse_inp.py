@@ -1,6 +1,9 @@
 import os
+from posixpath import abspath
 import numpy as np
 import argparse
+import re
+import utils
 
 
 class InpParser:
@@ -10,176 +13,226 @@ class InpParser:
 
     def __init__(self, inp_name):
         self.inp_name = inp_name
-        self.X = list()
-        self.conn = dict()
-        self.nnodes = None
-        self.nelems = None
+
+        self.nodes = None
+        self.conn = None
+        self.X = None
+        self.groups = None
+
+        self.SUPPORTED_ELEMENT = {
+            "CPS3": {
+                "nnode": 3,
+                "vtk_type": 5,
+                "note": "Three-node plane stress element",
+            },
+            "C3D8R": {
+                "nnode": 8,
+                "vtk_type": 12,
+                "note": "general purpose linear brick element",
+            },
+            "C3D10": {
+                "nnode": 10,
+                "vtk_type": 24,
+                "note": "Ten-node tetrahedral element",
+            },
+        }
         return
 
-    def _line_to_list(self, line, dtype=float, drop_index=False, offset=0):
+    def parse(self):
+        """
+        Parse the inp file.
+
+        Return:
+            nodes: nodal indices, (nnodes,)
+            conn: a dictionary of connectivity, conn[element_type] = conn_array
+            X: nodal locations, (nnodes, ndof_per_node)
+            groups: grouped nodes, dictionary, groups[name] = [...]
+        """
+        # Get and clean data chunks
+        data_chunks = self._load_data_chunks()
+        self._clean_data(data_chunks)
+
+        # Reorganize data chunk by type
+        chunks_node = [c for c in data_chunks if c["data_chunk_type"].lower() == "node"]
+        chunks_element = [
+            c
+            for c in data_chunks
+            if c["data_chunk_type"].lower() == "element"
+            and c["type"] in self.SUPPORTED_ELEMENT
+        ]
+        chunks_nset = [c for c in data_chunks if c["data_chunk_type"].lower() == "nset"]
+
+        # Parse nodal location
+        if len(chunks_node) > 1:
+            print("[Warning] Multiple *Node sections detected")
+            X = []
+            for c in chunks_node:
+                X.extend(c["data"])
+        else:
+            X = chunks_node[0]["data"]
+        X = np.array(X)
+
+        # Create nodal numbering
+        nodes = np.arange(len(X))
+
+        # Parse connectivity for different element types
+        conn = {}
+        for c in chunks_element:
+            conn[c["type"]] = np.array(c["data"])
+
+        # Parse grouped nodes
+        groups = {}
+        for c in chunks_nset:
+            groups[c["nset"]] = np.array(c["data"])
+
+        self.nodes = nodes
+        self.conn = conn
+        self.X = X
+        self.groups = groups
+        return nodes, conn, X, groups
+
+    def to_vtk(self, nodal_sol={}, vtk_name=None):
+        """
+        Generate a vtk file for mesh and optionally solution
+
+        Inputs:
+            nodal_sol: nodal solution values, dictionary with the following
+                        structure:
+
+                        nodal_sol = {
+                            "scalar1": [...],
+                            "scalar2": [...],
+                            ...
+                        }
+            vtk_name: name of the vtk
+        """
+        if self.nodes is None:
+            self.parse()
+
+        if vtk_name is None:
+            vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
+        utils.to_vtk(self.nodes, self.conn, self.X, nodal_sol, vtk_name)
+        return
+
+    def _sort_B_by_A(self, A, B):
+        A, B = zip(*sorted(zip(A, B)))
+        return A, B
+
+    def _load_data_chunks(self):
+        """
+        Organize the entire text file to data chunks, each chunk has a header
+        line and one or multiple data lines
+
+        Return:
+            data_chunks: list of dictionary, each dictionary has the following
+                         structure:
+
+                         data_chunk = {
+                             "data_chunk_type": <type>,
+                             "args": [<arg1>, <arg2>, ...],
+                             <key1>: <value1>,
+                             <key2>: <value2>,
+                             ...
+                             "data": [<dataline1>, <dataline2>, ...]
+                         }
+
+        """
+        data_chunks = []
+
+        # Patterns
+        header_pattern = re.compile(r"\*(\w+)")  # \w = a-zA-Z0-9_
+        args_pattern = re.compile(r"[\s,](\w+)(\s|,|$)")
+        kwargs_pattern = re.compile(r"(\w+)=(\w+)")
+
+        with open(self.inp_name, "r") as fh:
+            for line in fh:
+                line = line.strip()
+                if header_pattern.search(line):
+                    data_chunk_type = header_pattern.findall(line)[0]
+                    args = args_pattern.findall(line)
+                    kwargs = kwargs_pattern.findall(line)
+                    chunk = {
+                        "data_chunk_type": data_chunk_type,
+                        "args": [a[0] for a in args],
+                        "data": [],
+                    }
+                    for kw in kwargs:
+                        key, value = kw
+                        chunk[key.lower()] = value
+                    data_chunks.append(chunk)
+                elif data_chunks and line:
+                    if line[0:2] != r"**":
+                        data_chunks[-1]["data"].append(line)
+        return data_chunks
+
+    def _line_to_list(self, line, dtype=float, separate_index=False, offset=0):
         """
         Convert a line of string to list of numbers with mixed types
 
         Inputs:
             line: a line of text file
             dtype: python built-in data type
-            drop_index: if true, discard the first number in line
 
-        Return:
-            vals: list of values, if fail, return None
+        Return (separete_index=True):
+            index, vals
+        Return (separete_index=False):
+            vals
         """
-        vals = [val.strip() for val in line.strip().split(",")]
-        if not vals[0].isnumeric():
-            return None
-
+        # Remove trailing space, comma and \n
+        vals = line.strip("\n, ").split(",")
         vals = [dtype(v) + offset for v in vals]
-        if drop_index:
+        if separate_index:
+            idx = vals[0]
             vals = vals[1:]
+            return idx, vals
         return vals
 
-    def _parse_nodes(self, fh, X):
+    def _clean_data(self, data_chunks):
         """
-        Get nodal information from node section. Node section is the lines
-        after *Node.
-        Note: We assume that nodes are numbered as 1, 2, 3, ...
+        Convert data in data_chunks from list of strings to list of numerates
 
-        Inputs:
-            fh: inp file handle
-
-        Outputs:
-            X: list of xyz coordinates
-
-        Return:
-            line: the next line of data chunk, if None then EOF is hit
+        Input/Output:
+            data_chunks
         """
-        next_line = None
+        for chunk in data_chunks:
+            data_chunk_type = chunk["data_chunk_type"].lower()
+            data = []
+            raw_idx = []
 
-        # Get nodal numbering and xyz coordinates
-        for line in fh:
-            xyz = self._line_to_list(line, dtype=float, drop_index=True)
+            if data_chunk_type == "node":
+                for line in chunk["data"]:
+                    idx, xyz = self._line_to_list(
+                        line, dtype=float, separate_index=True
+                    )
+                    raw_idx.append(idx)
+                    data.append(xyz)
 
-            # Break when data chunk ends
-            if not xyz:
-                next_line = line
-                break
+                # Make sure no duplicate nodal index and no skip, so that we can reorder
+                assert len(set(raw_idx)) == len(data) == max(raw_idx) - min(raw_idx) + 1
+                raw_idx, data = self._sort_B_by_A(raw_idx, data)
 
-            # Add node to the dictionary
-            X.append(xyz)
+            elif data_chunk_type == "element":
+                for line in chunk["data"]:
+                    idx, elem_conn = self._line_to_list(
+                        line, dtype=int, separate_index=True, offset=-1
+                    )
+                    raw_idx.append(idx)
+                    data.append(elem_conn)
 
-        return next_line
+                # Make sure no duplicate element index and no skip, so that we can reorder
+                assert len(set(raw_idx)) == len(data) == max(raw_idx) - min(raw_idx) + 1
+                raw_idx, data = self._sort_B_by_A(raw_idx, data)
 
-    def _parse_elems(self, fh, etype, conn):
-        """
-        Get element mapping. Element mapping data chunk is after *Element.
-        Note: We assume that elements are numbered as 1, 2, 3, ...
+            elif data_chunk_type == "nset":
+                for line in chunk["data"]:
+                    data.extend(self._line_to_list(line, dtype=int, offset=-1))
 
-        Inputs:
-            fh: inp file handle
-            etype: element type
+            else:
+                print(f"[Info] No cleaning rule for {data_chunk_type}")
+                data = chunk["data"]
 
-        Outputs:
-            conn: dictionary of connectivities, conn[etype] = list of conns
-
-        Return:
-            line: the next line of data chunk, if None then EOF is hit
-        """
-        next_line = None
-
-        if etype not in conn.keys():
-            conn[etype] = []
-
-        # Get element numbering and nodal indices
-        for line in fh:
-            # Note that offset = -1 because Abaqus uses 1-based indexing, while
-            # 0-based indexing is what we want
-            _conn = self._line_to_list(line, dtype=int, drop_index=True, offset=-1)
-
-            # Break when data chunk ends
-            if not _conn:
-                next_line = line
-                break
-
-            conn[etype].append(_conn)
-        return next_line
-
-    def parse_inp(self):
-        """
-        Parse the inp file.
-        """
-        print(f"Parsing {self.inp_name} ...", end="")
-
-        # Load data from inp
-        with open(self.inp_name) as fh:
-            # Move to node section
-            for line in fh:
-                if line.strip() == "*Node":
-                    break
-
-            # Get nodes
-            self._parse_nodes(fh, self.X)
-
-            # Get element connectivity
-            self._parse_elems(fh, "C3D8R", self.conn)
-            self._parse_elems(fh, "C3D10", self.conn)
-
-        # Convert to numpy array
-        self.X = np.array(self.X)
-        self.conn = {key: np.array(val) for key, val in self.conn.items()}
-
-        # Count nodes and elements
-        self.nnodes = self.X.shape[0]
-        self.nelems = np.sum([len(v) for k, v in self.conn.items()])
-
-        print("done")
-        return
-
-    def to_vtk(self, vtk_name=None):
-        """
-        Generate a vtk from inp.
-        """
-        if vtk_name is None:
-            vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
-
-        print(f"Converting {self.inp_name} to {vtk_name} ...", end="")
-
-        # Create a empty vtk file and write headers
-        with open(vtk_name, "w") as fh:
-            fh.write("# vtk DataFile Version 3.0\n")
-            fh.write("my example\n")
-            fh.write("ASCII\n")
-            fh.write("DATASET UNSTRUCTURED_GRID\n")
-
-            # Write nodal points
-            fh.write("POINTS {:d} double\n".format(self.nnodes))
-            for x in self.X:
-                row = f"{x}"[1:-1]
-                fh.write(f"{row}\n")
-
-            einfo = {
-                "C3D8R": {"nnode": 8, "vtk_type": 12},
-                "C3D10": {"nnode": 10, "vtk_type": 24},
-            }
-
-            # Write connectivity
-            N = self.nelems
-            size = np.sum(
-                [len(v) * (1 + einfo[k]["nnode"]) for k, v in self.conn.items()]
-            )
-            fh.write(f"CELLS {N} {size}\n")
-            for etype, conn in self.conn.items():
-                for c in conn:
-                    node_idx = f"{c}"[1:-1]  # remove square bracket [ and ]
-                    npts = einfo[etype]["nnode"]
-                    fh.write(f"{npts} {node_idx}\n")
-
-            # Write cell type
-            fh.write(f"CELL_TYPES {self.nelems}\n")
-            for etype, conn in self.conn.items():
-                for c in conn:
-                    vtk_type = einfo[etype]["vtk_type"]
-                    fh.write(f"{vtk_type}\n")
-
-        print("done")
+            # Update data
+            chunk["data"] = data
         return
 
 
@@ -188,5 +241,5 @@ if __name__ == "__main__":
     p.add_argument("inp", type=str, metavar="[inp file]")
     args = p.parse_args()
     inp_parser = InpParser(args.inp)
-    inp_parser.parse_inp()
+    inp_parser.parse()
     inp_parser.to_vtk()

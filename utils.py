@@ -5,30 +5,40 @@ from time import perf_counter_ns
 import numpy as np
 
 
-def time_this(func):
-    """
-    Decorator: time the execution of a function
-    """
-    tab = "    "
-    time_this.counter = 0  # a "static" variable
-    fun_name = func.__qualname__
+class MyLogger:
+    counter = 0  # a static variable
+    print_to_stdout = True
 
-    def wrapper(*args, **kwargs):
-        info_str = f"{tab*time_this.counter}{fun_name}() called"
-        print(f"[timer] {info_str:<40s}")
-        time_this.counter += 1
-        t0 = perf_counter_ns()
-        ret = func(*args, **kwargs)
-        t1 = perf_counter_ns()
-        time_this.counter -= 1
-        info_str = f"{tab*time_this.counter}{fun_name}() return"
-        print(
-            f"[timer] {info_str:<80s}",
-            f"({(t1 - t0) / 1e6:.2f} ms)",
-        )
-        return ret
+    @staticmethod
+    def time_this(func):
+        """
+        Decorator: time the execution of a function
+        """
+        tab = "    "
+        fun_name = func.__qualname__
 
-    return wrapper
+        def wrapper(*args, **kwargs):
+            info_str = f"{tab*MyLogger.counter}{fun_name}() called"
+            if MyLogger.print_to_stdout:
+                print(f"[timer] {info_str:<40s}")
+            MyLogger.counter += 1
+            t0 = perf_counter_ns()
+            ret = func(*args, **kwargs)
+            t1 = perf_counter_ns()
+            t_elapse = (t1 - t0) / 1e6  # unit: ms
+            MyLogger.counter -= 1
+            info_str = f"{tab*MyLogger.counter}{fun_name}() return"
+            if MyLogger.print_to_stdout:
+                print(
+                    f"[timer] {info_str:<80s}",
+                    f"({t_elapse:.2f} ms)",
+                )
+            return ret
+
+        return wrapper
+
+
+time_this = MyLogger.time_this
 
 
 @time_this
@@ -126,7 +136,20 @@ def compute_basis_grad(Jq, detJq, Nderiv, invJq, Ngrad):
         invJq[..., 1, 0] = -Jq[..., 1, 0] / detJq
         invJq[..., 1, 1] = Jq[..., 0, 0] / detJq
     else:
-        raise NotImplementedError
+        # fmt: off
+        invJq[..., 0, 0] =  (Jq[..., 1, 1] * Jq[..., 2, 2] - Jq[..., 1, 2] * Jq[..., 2, 1]) / detJq
+        invJq[..., 0, 1] = -(Jq[..., 0, 1] * Jq[..., 2, 2] - Jq[..., 0, 2] * Jq[..., 2, 1]) / detJq
+        invJq[..., 0, 2] =  (Jq[..., 0, 1] * Jq[..., 1, 2] - Jq[..., 0, 2] * Jq[..., 1, 1]) / detJq
+
+        invJq[..., 1, 0] = -(Jq[..., 1, 0] * Jq[..., 2, 2] - Jq[..., 1, 2] * Jq[..., 2, 0]) / detJq
+        invJq[..., 1, 1] =  (Jq[..., 0, 0] * Jq[..., 2, 2] - Jq[..., 0, 2] * Jq[..., 2, 0]) / detJq
+        invJq[..., 1, 2] = -(Jq[..., 0, 0] * Jq[..., 1, 2] - Jq[..., 0, 2] * Jq[..., 1, 0]) / detJq
+
+        invJq[..., 2, 0] =  (Jq[..., 1, 0] * Jq[..., 2, 1] - Jq[..., 1, 1] * Jq[..., 2, 0]) / detJq
+        invJq[..., 2, 1] = -(Jq[..., 0, 0] * Jq[..., 2, 1] - Jq[..., 0, 1] * Jq[..., 2, 0]) / detJq
+        invJq[..., 2, 2] =  (Jq[..., 0, 0] * Jq[..., 1, 1] - Jq[..., 0, 1] * Jq[..., 1, 0]) / detJq
+        # fmt: on
+
     Ngrad[:, :, :, :] = np.einsum("jkm, ijml -> ijkl", Nderiv, invJq)
     return
 
@@ -163,3 +186,116 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
             conn_dof[:, axis::ndof_per_node] = axis + ndof_per_node * conn
 
     return dof, dof_each_node, conn_dof
+
+
+def to_vtk(nodes, conn, X, nodal_sol={}, vtk_name="problem.vtk"):
+    """
+    Generate a vtk given nodes, conn, X, and optionally nodal_sol
+
+    Inputs:
+        nnodes: ndarray
+        conn: ndarray or dictionary if a mixed mesh is used
+        X: ndarray
+        nodal_sol: nodal solution values, dictionary with the following
+                    structure:
+
+                    nodal_sol = {
+                        "scalar1": [...],
+                        "scalar2": [...],
+                        ...
+                    }
+
+        vtk_name: name of the vtk
+    """
+    ELEMENT_INFO = {
+        "CPS3": {
+            "nnode": 3,
+            "vtk_type": 5,
+            "note": "Three-node plane stress element",
+        },
+        "C3D8R": {
+            "nnode": 8,
+            "vtk_type": 12,
+            "note": "general purpose linear brick element",
+        },
+        "C3D10": {
+            "nnode": 10,
+            "vtk_type": 24,
+            "note": "Ten-node tetrahedral element",
+        },
+        "tri": {
+            "nnode": 3,
+            "vtk_type": 5,
+            "note": "triangle element",
+        },
+        "quad": {
+            "nnode": 4,
+            "vtk_type": 9,
+            "note": "2d quadrilateral element",
+        },
+        "block": {
+            "nnode": 8,
+            "vtk_type": 12,
+            "note": "3d block element",
+        },
+    }
+
+    if isinstance(conn, np.ndarray):
+        if conn.shape[1] == 3:
+            conn = {"tri": conn}
+        elif conn.shape[1] == 4:
+            conn = {"quad": conn}
+        elif conn.shape[1] == 8:
+            conn = {"block": conn}
+
+    # vtk requires a 3-dimensional data point
+    if X.shape[1] == 2:
+        X = np.append(X, np.zeros((X.shape[0], 1)), axis=1)
+
+    nnodes = len(nodes)
+    nelems = np.sum([len(c) for c in conn.values()])
+
+    # Create a empty vtk file and write headers
+    with open(vtk_name, "w") as fh:
+        fh.write("# vtk DataFile Version 3.0\n")
+        fh.write("my example\n")
+        fh.write("ASCII\n")
+        fh.write("DATASET UNSTRUCTURED_GRID\n")
+
+        # Write nodal points
+        fh.write("POINTS {:d} double\n".format(nnodes))
+        for x in X:
+            row = f"{x}"[1:-1]  # Remove square brackets in the string
+            fh.write(f"{row}\n")
+
+        # Write connectivity
+        size = np.sum(
+            [
+                len(econn) * (1 + ELEMENT_INFO[etype]["nnode"])
+                for etype, econn in conn.items()
+            ]
+        )
+        fh.write(f"CELLS {nelems} {size}\n")
+        for etype, econn in conn.items():
+            for c in econn:
+                node_idx = f"{c}"[1:-1]  # remove square bracket [ and ]
+                npts = ELEMENT_INFO[etype]["nnode"]
+                fh.write(f"{npts} {node_idx}\n")
+
+        # Write cell type
+        fh.write(f"CELL_TYPES {nelems}\n")
+        for etype, econn in conn.items():
+            for c in econn:
+                vtk_type = ELEMENT_INFO[etype]["vtk_type"]
+                fh.write(f"{vtk_type}\n")
+
+        # Write solution
+        if nodal_sol:
+            fh.write(f"POINT_DATA {nnodes}\n")
+            for name, data in nodal_sol.items():
+                fh.write(f"SCALARS {name} float 1\n")
+                fh.write("LOOKUP_TABLE default\n")
+                for val in data:
+                    fh.write(f"{val}\n")
+    print(f"[Info] Done generating {vtk_name}")
+    return

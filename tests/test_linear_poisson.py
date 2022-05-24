@@ -10,7 +10,7 @@ import pyfem
 class LinearPoissonCase(unittest.TestCase):
     def test_linear_poisson(self):
         # Compute u
-        creator = pyfem.ProblemCreator(nelems_x=64, nelems_y=64)
+        creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
         nodes, conn, X, dof_fixed = creator.create_poisson_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
@@ -31,7 +31,7 @@ class LinearPoissonCase(unittest.TestCase):
         pTu_ref = p.dot(u_ref)
         print(f"pTu    :{pTu}")
         print(f"pTu_ref:{pTu_ref}")
-        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-14)
+        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-10)
         return
 
 
