@@ -793,7 +793,7 @@ class LinearElasticity(ModelBase):
             self.C[0, 1] = self.C[0, 2] = self.C[1, 0] = nu
             self.C[1, 2] = self.C[2, 0] = self.C[2, 1] = nu
             self.C[3, 3] = self.C[4, 4] = self.C[5, 5] = 0.5 - nu
-            self.C *= E / (1 + nu) * (1 - 2 * nu)
+            self.C *= E / ((1 + nu) * (1 - 2 * nu))
 
         n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
         self.Be = np.zeros(
