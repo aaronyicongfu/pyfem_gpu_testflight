@@ -1,3 +1,4 @@
 *.out
 *.vtk
 __pycache__
+.DS_Store
