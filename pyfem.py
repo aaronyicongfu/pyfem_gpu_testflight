@@ -389,8 +389,17 @@ class ModelBase(ABC):
         # Element-wise rhs
         self.rhs_e = np.zeros((self.nelems, self.nnodes_per_elem * self.ndof_per_node))
 
-        # Element-wise Jacobian matrix
-        self.Ke = np.zeros(
+        # Element-wise Jacobian tensor and matrix
+        self.Ke_tensor = np.zeros(
+            (
+                self.nelems,
+                self.nnodes_per_elem,
+                self.nnodes_per_elem,
+                self.ndof_per_node,
+                self.ndof_per_node,
+            )
+        )
+        self.Ke_mat = np.zeros(
             (
                 self.nelems,
                 self.nnodes_per_elem * self.ndof_per_node,
@@ -546,11 +555,59 @@ class ModelBase(ABC):
         return
 
     @time_this
-    def _assemble_jacobian(self, Ke):
+    def _jacobian_mat_to_tensor(self, mat, tensor):
         """
-        Assemble global K matrix
+        Convert element Jacobian matrix to tensor
+
+        Inputs:
+            mat: (nelems, nnodes_per_elem * ndof_per_node, nnodes_per_elem *
+                 ndof_per_node)
+
+        Outputs:
+            tensor: (nelems, nnodes_per_elem, nnodes_per_elem, ndof_per_node,
+                    ndof_per_node)
         """
-        K = sparse.coo_matrix((Ke.flatten(), (self.nz_i, self.nz_j)))
+        nelems, nnodes_per_elem, _, ndof_per_node, _ = tensor.shape
+        tensor[:, :, :, :, :] = (
+            mat.reshape(nelems, -1, ndof_per_node, nnodes_per_elem * ndof_per_node)
+            .swapaxes(2, 3)
+            .reshape(
+                nelems, nnodes_per_elem, nnodes_per_elem, ndof_per_node, ndof_per_node
+            )
+            .swapaxes(3, 4)
+        )
+        return
+
+    @time_this
+    def _jacobian_tensor_to_mat(self, tensor, mat):
+        """
+        Convert element Jacobian tensor to matrix
+
+        Inputs:
+            tensor: (nelems, nnodes_per_elem, nnodes_per_elem, ndof_per_node,
+                    ndof_per_node)
+
+        Outputs:
+            mat: (nelems, nnodes_per_elem * ndof_per_node, nnodes_per_elem *
+                 ndof_per_node)
+        """
+        nelems, nnodes_per_elem, _, ndof_per_node, _ = tensor.shape
+        mat[:, :, :] = tensor.swapaxes(2, 3).reshape(
+            nelems, nnodes_per_elem * ndof_per_node, nnodes_per_elem * ndof_per_node
+        )
+        return
+
+    @time_this
+    def _assemble_jacobian(self, Ke_mat):
+        """
+        Assemble global K matrix from Ke matrices
+
+        Inputs:
+            Ke_mat: element-wise Jacobian in matrix form, (nelems,
+                    nnodes_per_elem * ndof_per_node, nnodes_per_elem
+                    * ndof_per_node)
+        """
+        K = sparse.coo_matrix((Ke_mat.flatten(), (self.nz_i, self.nz_j)))
         return K.tocsr()
 
 
@@ -604,11 +661,11 @@ class LinearPoisson2D(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
-        # Compute element Jacobian -> Ke
-        self._compute_element_jacobian(self.Ke)
+        # Compute element Jacobian matrix -> Ke_mat
+        self._compute_element_jacobian(self.Ke_mat)
 
         # Assemble global Jacobian -> K
-        K = self._assemble_jacobian(self.Ke)
+        K = self._assemble_jacobian(self.Ke_mat)
         return K
 
     @time_this
@@ -768,11 +825,11 @@ class LinearElasticity(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
-        # Compute element Jacobian -> Ke
-        self._compute_element_jacobian(self.Ke)
+        # Compute element Jacobian matrix -> Ke
+        self._compute_element_jacobian(self.Ke_mat)
 
         # Assemble global Jacobian -> K
-        K = self._assemble_jacobian(self.Ke)
+        K = self._assemble_jacobian(self.Ke_mat)
         return K
 
     @time_this
