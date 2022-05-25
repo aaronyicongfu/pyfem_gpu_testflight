@@ -908,8 +908,23 @@ class LinearElasticity(ModelBase):
         self._compute_element_B(self.Ngrad, self.Be)
 
         wq = self.quadrature.get_weight()
+        # path, info = np.einsum_path(
+        #     "iq,q,iqnj,nm,iqmk->ijk",
+        #     self.detJq,
+        #     wq,
+        #     self.Be,
+        #     self.C,
+        #     self.Be,
+        #     optimize="optimal",
+        # )
         Ke[...] = np.einsum(
-            "iq,q,iqnj,nm,iqmk->ijk", self.detJq, wq, self.Be, self.C, self.Be
+            "iq,q,iqnj,nm,iqmk->ijk",
+            self.detJq,
+            wq,
+            self.Be,
+            self.C,
+            self.Be,
+            optimize=True,
         )
         return
 
