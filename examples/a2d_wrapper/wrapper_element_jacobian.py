@@ -8,11 +8,18 @@ import utils
 sys.path.append("../../../a2d/examples/elasticity")
 import model as a2dmodel
 
+
+@utils.time_this
+def compute_jac_a2d():
+    a2dmodel.compute_jac(conn, X, data, U, jac)
+    return
+
+
 # Switch on logger
 utils.timer_on()
 
 # Set up mesh
-creator = pyfem.ProblemCreator(8, 4, 4, element_type="block")
+creator = pyfem.ProblemCreator(64, 32, 32, element_type="block")
 nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 # Compute element-wise Jacobian with a2d
@@ -33,7 +40,7 @@ data[:, :, 1] = lam  # Lame parameter: lambda
 
 U = np.zeros((nnodes, ndof_per_node))
 conn = conn.astype(np.intc)
-a2dmodel.compute_jac(conn, X, data, U, jac)
+compute_jac_a2d()
 
 # Compute element-wise Jacobian using pyfem
 quadrature = pyfem.QuadratureBlock3D()
