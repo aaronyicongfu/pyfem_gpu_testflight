@@ -19,6 +19,9 @@ p.add_argument(
 )
 args = p.parse_args()
 
+# Switch on timer
+utils.timer_on()
+
 # Set up the meshing utility and create the problem mesh
 creator = pyfem.ProblemCreator(args.nx, args.ny, args.nz, element_type="block")
 nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()

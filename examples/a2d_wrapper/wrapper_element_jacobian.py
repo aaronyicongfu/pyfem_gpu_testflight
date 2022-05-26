@@ -3,9 +3,13 @@ import numpy as np
 
 sys.path.append("../..")
 import pyfem
+import utils
 
 sys.path.append("../../../a2d/examples/elasticity")
 import model as a2dmodel
+
+# Switch on logger
+utils.timer_on()
 
 # Set up mesh
 creator = pyfem.ProblemCreator(8, 4, 4, element_type="block")
@@ -23,8 +27,6 @@ E = 10.0
 nu = 0.3
 mu = E / (2 * (1 + nu))
 lam = E * nu / (1 + nu) / (1 - 2 * nu)
-print(mu)
-print(lam)
 data = np.zeros((nelems, nquads, 2))  # Constitutive
 data[:, :, 0] = mu  # Lame parameter: mu
 data[:, :, 1] = lam  # Lame parameter: lambda
@@ -43,6 +45,6 @@ K = model.compute_jacobian()
 model._jacobian_mat_to_tensor(model.Ke_mat, model.Ke_tensor)
 
 # Cross-check
-print(jac / model.Ke_tensor)
-print(jac.shape)
-print(model.Ke_tensor.shape)
+diff = jac / model.Ke_tensor
+print(diff.min())
+print(diff.max())

@@ -7,7 +7,16 @@ import numpy as np
 
 class MyLogger:
     counter = 0  # a static variable
-    print_to_stdout = True
+    print_to_stdout = False
+
+    @staticmethod
+    def timer_on():
+        """
+        Call this function before execution to switch on the profiler
+        and print execution time for functions to stdout
+        """
+        MyLogger.print_to_stdout = True
+        return
 
     @staticmethod
     def time_this(func):
@@ -39,6 +48,7 @@ class MyLogger:
 
 
 time_this = MyLogger.time_this
+timer_on = MyLogger.timer_on
 
 
 @time_this

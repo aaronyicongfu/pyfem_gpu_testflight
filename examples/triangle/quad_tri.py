@@ -50,6 +50,8 @@ def run_problem(element_type):
 
 
 if __name__ == "__main__":
+    # Switch on timer
+    utils.timer_on()
 
     # Plot
     fig, ax = plt.subplots(ncols=2, constrained_layout=True)
