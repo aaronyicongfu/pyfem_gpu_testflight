@@ -15,11 +15,16 @@ def compute_jac_a2d():
     return
 
 
+@utils.time_this
+def compute_helmholtz_jac_a2d():
+    a2dmodel.compute_helmholtz_jac(conn, X, data, x, hz_jac)
+
+
 # Switch on logger
-utils.timer_on()
+# utils.timer_on()
 
 # Set up mesh
-creator = pyfem.ProblemCreator(64, 32, 32, element_type="block")
+creator = pyfem.ProblemCreator(16, 8, 8, element_type="block")
 nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 # Compute element-wise Jacobian with a2d
@@ -38,9 +43,9 @@ data = np.zeros((nelems, nquads, 2))  # Constitutive
 data[:, :, 0] = mu  # Lame parameter: mu
 data[:, :, 1] = lam  # Lame parameter: lambda
 
-U = np.zeros((nnodes, ndof_per_node))
+U = np.random.rand(nnodes, ndof_per_node)
 conn = conn.astype(np.intc)
-compute_jac_a2d()
+a2dmodel.compute_jac(conn, X, data, U, jac)
 
 # Compute element-wise Jacobian using pyfem
 quadrature = pyfem.QuadratureBlock3D()
@@ -51,7 +56,33 @@ model = pyfem.LinearElasticity(
 K = model.compute_jacobian()
 model._jacobian_mat_to_tensor(model.Ke_mat, model.Ke_tensor)
 
-# Cross-check
+# Check jacobian
 diff = jac / model.Ke_tensor
+print("Check Jacobian:")
+print(diff.min())
+print(diff.max())
+
+# Compute filtered variable with a2d
+ndof_per_node = 1
+nodes, conn, X, x = creator.create_helmhotz_problem()
+conn = conn.astype(np.intc)
+hz_jac = np.zeros(
+    (nelems, nnodes_per_elem, nnodes_per_elem, ndof_per_node, ndof_per_node)
+)
+r0 = 0.1
+x = x[:, np.newaxis]
+data[:, :, :] = r0
+a2dmodel.compute_helmholtz_jac(conn, X, data, x, hz_jac)
+
+# Compute filtered variable using pyfem
+model = pyfem.Helmholtz(r0, nodes, X, conn, quadrature, basis)
+K = model.compute_jacobian()
+model._jacobian_mat_to_tensor(model.Ke_mat, model.Ke_tensor)
+
+# Check Helmholtz filter
+print("Check Helmholtz filter:")
+diff = hz_jac / model.Ke_tensor
+print(hz_jac.flatten()[0:50])
+print(model.Ke_tensor.flatten()[0:50])
 print(diff.min())
 print(diff.max())
