@@ -5,6 +5,7 @@ from scipy.sparse.linalg import spsolve
 import matplotlib.pylab as plt
 import matplotlib.tri as tri
 
+
 class PoissonProblem:
     def __init__(self, N):
         self.N = min(10, max(N, 2))
@@ -13,7 +14,15 @@ class PoissonProblem:
         """
         Given the x and y locations return the right-hand-side
         """
-        g = 1e4 * xvals*(1.0 - xvals)*(1.0 - 2.0*xvals)*yvals*(1.0 - yvals)*(1.0 - 2.0*yvals)
+        g = (
+            1e4
+            * xvals
+            * (1.0 - xvals)
+            * (1.0 - 2.0 * xvals)
+            * yvals
+            * (1.0 - yvals)
+            * (1.0 - 2.0 * yvals)
+        )
 
         return g
 
@@ -21,15 +30,15 @@ class PoissonProblem:
         """
         Given the design variables and the x and y locations return h
         """
-
         h = np.ones(xvals.shape, dtype=xdv.dtype)
         for k in range(self.N):
             coef = special.binom(self.N - 1, k)
-            xarg = coef * (1.0 - xvals)**(self.N - 1 - k) * xvals**k
+            xarg = coef * (1.0 - xvals) ** (self.N - 1 - k) * xvals**k
             yarg = 4.0 * yvals * (1.0 - yvals)
             h += xdv[k] * xarg * yarg
 
         return h
+
 
 class NonlinearPoisson:
     def __init__(self, conn, x, bcs, problem):
@@ -84,12 +93,16 @@ class NonlinearPoisson:
         Evaluate the basis functions and Jacobian of the transformation
         """
 
-        N = 0.25*np.array([(1.0 - xi)*(1.0 - eta),
-                            (1.0 + xi)*(1.0 - eta),
-                            (1.0 + xi)*(1.0 + eta),
-                            (1.0 - xi)*(1.0 + eta)])
-        Nxi = 0.25*np.array([-(1.0 - eta), (1.0 - eta), (1.0 + eta), -(1.0 + eta)])
-        Neta = 0.25*np.array([-(1.0 - xi), -(1.0 + xi), (1.0 + xi), (1.0 - xi)])
+        N = 0.25 * np.array(
+            [
+                (1.0 - xi) * (1.0 - eta),
+                (1.0 + xi) * (1.0 - eta),
+                (1.0 + xi) * (1.0 + eta),
+                (1.0 - xi) * (1.0 + eta),
+            ]
+        )
+        Nxi = 0.25 * np.array([-(1.0 - eta), (1.0 - eta), (1.0 + eta), -(1.0 + eta)])
+        Neta = 0.25 * np.array([-(1.0 - xi), -(1.0 + xi), (1.0 + xi), (1.0 - xi)])
 
         # Compute the Jacobian transformation at each quadrature points
         J[:, 0, 0] = np.dot(xe, Nxi)
@@ -98,13 +111,13 @@ class NonlinearPoisson:
         J[:, 1, 1] = np.dot(ye, Neta)
 
         # Compute the inverse of the Jacobian
-        detJ[:] = J[:, 0, 0]*J[:, 1, 1] - J[:, 0, 1]*J[:, 1, 0]
+        detJ[:] = J[:, 0, 0] * J[:, 1, 1] - J[:, 0, 1] * J[:, 1, 0]
 
         if invJ is not None:
-            invJ[:, 0, 0] = J[:, 1, 1]/detJ
-            invJ[:, 0, 1] = -J[:, 0, 1]/detJ
-            invJ[:, 1, 0] = -J[:, 1, 0]/detJ
-            invJ[:, 1, 1] = J[:, 0, 0]/detJ
+            invJ[:, 0, 0] = J[:, 1, 1] / detJ
+            invJ[:, 0, 1] = -J[:, 0, 1] / detJ
+            invJ[:, 1, 0] = -J[:, 1, 0] / detJ
+            invJ[:, 1, 1] = J[:, 0, 0] / detJ
 
         return N, Nxi, Neta
 
@@ -126,7 +139,7 @@ class NonlinearPoisson:
             dtype = complex
 
         # Gauss points
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # The residuals for each finite-element
         Re = np.zeros((self.nelems, 4), dtype=dtype)
@@ -149,7 +162,9 @@ class NonlinearPoisson:
             for i in range(2):
                 xi = gauss_pts[i]
                 eta = gauss_pts[j]
-                N, Nxi, Neta = self._eval_basis_and_jacobian(xi, eta, xe, ye, J, detJ, invJ)
+                N, Nxi, Neta = self._eval_basis_and_jacobian(
+                    xi, eta, xe, ye, J, detJ, invJ
+                )
 
                 # Compute the derivative of the shape functions w.r.t. xi and eta
                 # [Nx, Ny] = [Nxi, Neta]*invJ
@@ -170,7 +185,9 @@ class NonlinearPoisson:
                 h = self.problem.hfunc(xdv, xvals, yvals)
 
                 # Add the contribution to the element residuals
-                Re += np.einsum('n,nij,nil,nl -> nj', detJ * h * (1.0 + uvals**2), Be, Be, ue)
+                Re += np.einsum(
+                    "n,nij,nil,nl -> nj", detJ * h * (1.0 + uvals**2), Be, Be, ue
+                )
                 Re -= np.outer(detJ * g, N)
 
         # Assemble the residuals
@@ -198,7 +215,7 @@ class NonlinearPoisson:
             dtype = complex
 
         # Gauss points
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # The residuals for each finite-element
         Re = np.zeros((self.nelems, 4), dtype=dtype)
@@ -217,12 +234,13 @@ class NonlinearPoisson:
 
         # Set the state variable for all the elements
         ue = u[self.conn]
-
         for j in range(2):
             for i in range(2):
                 xi = gauss_pts[i]
                 eta = gauss_pts[j]
-                N, Nxi, Neta = self._eval_basis_and_jacobian(xi, eta, xe, ye, J, detJ, invJ)
+                N, Nxi, Neta = self._eval_basis_and_jacobian(
+                    xi, eta, xe, ye, J, detJ, invJ
+                )
 
                 # Compute the derivative of the shape functions w.r.t. xi and eta
                 # [Nx, Ny] = [Nxi, Neta]*invJ
@@ -242,13 +260,17 @@ class NonlinearPoisson:
                 g = self.problem.gfunc(xvals, yvals)
                 h = self.problem.hfunc(xdv, xvals, yvals)
 
-                # Add the contributions to the residuals
-                Re += np.einsum('n,nij,nil,nl -> nj', detJ * h * (1.0 + uvals**2), Be, Be, ue)
+                Re += np.einsum(
+                    "n,nij,nil,nl -> nj", detJ * h * (1.0 + uvals**2), Be, Be, ue
+                )
                 Re -= np.outer(detJ * g, N)
 
-                # This is a fancy (and fast) way to compute the element matrices
-                Ke += np.einsum('n,nij,nil -> njl', detJ * h * (1.0 + uvals**2), Be, Be)
-                Ke += np.einsum('n,nij,nil,nl,k -> njk', 2.0 * detJ * h * uvals, Be, Be, ue, N)
+                Ke += np.einsum(
+                    "n,nij,nil -> njl", detJ * h * (1.0 + uvals**2), Be, Be
+                )
+                Ke += np.einsum(
+                    "n,nij,nil,nl,k -> njk", 2.0 * detJ * h * uvals, Be, Be, ue, N
+                )
 
         # Assemble the residuals
         res = np.zeros(self.nvars, dtype=dtype)
@@ -267,7 +289,7 @@ class NonlinearPoisson:
         offset = np.max(u)
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # Assemble all of the the 4 x 4 element stiffness matrix
         Ke = np.zeros((self.nelems, 4, 4))
@@ -293,9 +315,9 @@ class NonlinearPoisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                expsum += np.sum(detJ * np.exp(pval*(uvals - offset)))
+                expsum += np.sum(detJ * np.exp(pval * (uvals - offset)))
 
-        return offset + np.log(expsum)/pval
+        return offset + np.log(expsum) / pval
 
     def eval_ks_adjoint_rhs(self, pval, u):
 
@@ -303,7 +325,7 @@ class NonlinearPoisson:
         offset = np.max(u)
 
         # Compute the element stiffness matrix
-        gauss_pts = [-1.0/np.sqrt(3.0), 1.0/np.sqrt(3.0)]
+        gauss_pts = [-1.0 / np.sqrt(3.0), 1.0 / np.sqrt(3.0)]
 
         # Information about the element transformation
         detJ = np.zeros(self.nelems)
@@ -326,7 +348,7 @@ class NonlinearPoisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                expsum += np.sum(detJ * np.exp(pval*(uvals - offset)))
+                expsum += np.sum(detJ * np.exp(pval * (uvals - offset)))
 
         # Store the element-wise right-hand-side
         erhs = np.zeros(self.conn.shape)
@@ -340,7 +362,7 @@ class NonlinearPoisson:
                 # Compute the values at the nodes
                 uvals = np.dot(ue, N)
 
-                erhs += np.outer(detJ * np.exp(pval*(uvals - offset))/expsum, N)
+                erhs += np.outer(detJ * np.exp(pval * (uvals - offset)) / expsum, N)
 
         # Convert to the right-hand-side
         rhs = np.zeros(self.nnodes)
@@ -380,14 +402,14 @@ class NonlinearPoisson:
             u = u0
 
         res_norm_init = 0.0
-        print('{0:5s} {1:25s}'.format('Iter', 'Norm'))
+        print("ref", "{0:5s} {1:25s}".format("Iter", "Norm"))
 
         for k in range(max_iter):
             res, K = self.assemble_jacobian(xdv, u)
             resr = self.reduce_vector(res)
 
             res_norm = np.sqrt(np.dot(resr, resr))
-            print('{0:5d} {1:25.15e}'.format(k, res_norm))
+            print("{0:5d} {1:25.15e}".format(k, res_norm))
 
             if k == 0:
                 res_norm_init = res_norm
@@ -399,7 +421,6 @@ class NonlinearPoisson:
 
             update = np.zeros(self.nvars, dtype=dtype)
             update[self.reduced] = updater
-
             u -= update
 
         return u
@@ -434,88 +455,89 @@ class NonlinearPoisson:
             u = self.u_save
 
         # Create the triangles
-        triangles = np.zeros((2*self.nelems, 3), dtype=int)
-        triangles[:self.nelems, 0] = self.conn[:, 0]
-        triangles[:self.nelems, 1] = self.conn[:, 1]
-        triangles[:self.nelems, 2] = self.conn[:, 2]
+        triangles = np.zeros((2 * self.nelems, 3), dtype=int)
+        triangles[: self.nelems, 0] = self.conn[:, 0]
+        triangles[: self.nelems, 1] = self.conn[:, 1]
+        triangles[: self.nelems, 2] = self.conn[:, 2]
 
-        triangles[self.nelems:, 0] = self.conn[:, 0]
-        triangles[self.nelems:, 1] = self.conn[:, 2]
-        triangles[self.nelems:, 2] = self.conn[:, 3]
+        triangles[self.nelems :, 0] = self.conn[:, 0]
+        triangles[self.nelems :, 1] = self.conn[:, 2]
+        triangles[self.nelems :, 2] = self.conn[:, 3]
 
         # Create the triangulation object
-        tri_obj = tri.Triangulation(self.x[:,0], self.x[:,1], triangles)
+        tri_obj = tri.Triangulation(self.x[:, 0], self.x[:, 1], triangles)
 
         if ax is None:
             fig, ax = plt.subplots()
 
         # Set the aspect ratio equal
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
         # Create the contour plot
         ax.tricontourf(tri_obj, u, **kwargs)
 
         return
 
-n = 75
-nelems = n**2
-nnodes = (n + 1)*(n + 1)
-y = np.linspace(0, 1, n + 1)
-x = np.linspace(0, 1, n + 1)
-nodes = np.arange(0, (n + 1)*(n + 1)).reshape((n + 1, n + 1))
 
-# Set the node locations
-X = np.zeros((nnodes, 2))
-for j in range(n + 1):
-    for i in range(n + 1):
-        X[i + j*(n + 1), 0] = x[i]
-        X[i + j*(n + 1), 1] = y[j]
+# n = 75
+# nelems = n**2
+# nnodes = (n + 1)*(n + 1)
+# y = np.linspace(0, 1, n + 1)
+# x = np.linspace(0, 1, n + 1)
+# nodes = np.arange(0, (n + 1)*(n + 1)).reshape((n + 1, n + 1))
 
-# Set the connectivity
-conn = np.zeros((nelems, 4), dtype=int)
-for j in range(n):
-    for i in range(n):
-        conn[i + j*n, 0] = nodes[j, i]
-        conn[i + j*n, 1] = nodes[j, i + 1]
-        conn[i + j*n, 2] = nodes[j + 1, i + 1]
-        conn[i + j*n, 3] = nodes[j + 1, i]
+# # Set the node locations
+# X = np.zeros((nnodes, 2))
+# for j in range(n + 1):
+#     for i in range(n + 1):
+#         X[i + j*(n + 1), 0] = x[i]
+#         X[i + j*(n + 1), 1] = y[j]
 
-# Set the constrained degrees of freedom at each node
-bcs = []
-for j in range(n+1):
-    bcs.append(nodes[j, 0])
-    bcs.append(nodes[j, -1])
-    bcs.append(nodes[0, j])
-    bcs.append(nodes[-1, j])
+# # Set the connectivity
+# conn = np.zeros((nelems, 4), dtype=int)
+# for j in range(n):
+#     for i in range(n):
+#         conn[i + j*n, 0] = nodes[j, i]
+#         conn[i + j*n, 1] = nodes[j, i + 1]
+#         conn[i + j*n, 2] = nodes[j + 1, i + 1]
+#         conn[i + j*n, 3] = nodes[j + 1, i]
 
-# Make the boundary conditions unique
-bcs = np.unique(bcs)
+# # Set the constrained degrees of freedom at each node
+# bcs = []
+# for j in range(n+1):
+#     bcs.append(nodes[j, 0])
+#     bcs.append(nodes[j, -1])
+#     bcs.append(nodes[0, j])
+#     bcs.append(nodes[-1, j])
 
-problem = PoissonProblem(10)
+# # Make the boundary conditions unique
+# bcs = np.unique(bcs)
 
-# Create the Poisson problem
-poisson = NonlinearPoisson(conn, X, bcs, problem)
+# problem = PoissonProblem(10)
 
-x = np.ones(problem.N)/problem.N
-u = np.ones(poisson.nvars)
+# # Create the Poisson problem
+# poisson = NonlinearPoisson(conn, X, bcs, problem)
 
-# Set the perturbation direction
-p = np.zeros(poisson.nvars)
-p[nodes] = X[nodes, 0] + X[nodes, 1] + X[nodes, 0]*X[nodes, 1]
+# x = np.ones(problem.N)/problem.N
+# u = np.ones(poisson.nvars)
 
-res, J = poisson.assemble_jacobian(x, u)
-Jp = J.dot(p)
+# # Set the perturbation direction
+# p = np.zeros(poisson.nvars)
+# p[nodes] = X[nodes, 0] + X[nodes, 1] + X[nodes, 0]*X[nodes, 1]
 
-eps = 1e-30
-fd = poisson.assemble_residual(x, u + 1j * eps * p).imag/eps
+# res, J = poisson.assemble_jacobian(x, u)
+# Jp = J.dot(p)
 
-for i in range(10):
-    print('{0:25.15e} {1:25.15e} {2:25.15e}'.format(fd[i], Jp[i], (fd[i] - Jp[i])/fd[i]))
+# eps = 1e-30
+# fd = poisson.assemble_residual(x, u + 1j * eps * p).imag/eps
 
-u = poisson.solve(x)
-poisson.plot(u)
+# for i in range(10):
+#     print('{0:25.15e} {1:25.15e} {2:25.15e}'.format(fd[i], Jp[i], (fd[i] - Jp[i])/fd[i]))
 
-for pval in [1.0, 10, 100, 500]:
-    print('KS value: {0:20.10f} max: {1:20.10f}'.format(poisson.eval_ks(pval, u), np.max(u)))
-    psi = poisson.solve_adjoint(x, u, pval=pval)
-    poisson.plot(psi)
+# u = poisson.solve(x)
+# poisson.plot(u)
+
+# for pval in [1.0, 10, 100, 500]:
+#     print('KS value: {0:20.10f} max: {1:20.10f}'.format(poisson.eval_ks(pval, u), np.max(u)))
+#     psi = poisson.solve_adjoint(x, u, pval=pval)
+#     poisson.plot(psi)
