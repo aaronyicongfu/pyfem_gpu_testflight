@@ -3,7 +3,6 @@ import unittest
 import sys
 from ref_nonlinear_poisson import PoissonProblem, NonlinearPoisson
 import matplotlib.pylab as plt
-from icecream import ic
 
 sys.path.append("..")
 import pyfem
@@ -11,16 +10,16 @@ import pyfem
 
 class NonLinearPoissonCase(unittest.TestCase):
     def test_nonlinear_poisson(self):
-        
+
         # create a structure
-        creator = pyfem.ProblemCreator(nnodes_x=64, nnodes_y=64)
+        creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
         nodes, conn, X, dof_fixed = creator.create_poisson_problem()
 
         """ Compute u_ref """
         problem = PoissonProblem(10)
         # Create the Poisson problem
         poisson = NonlinearPoisson(conn, X, dof_fixed, problem)
-        x = np.ones(problem.N)/problem.N
+        x = np.ones(problem.N) / problem.N
         u_ref = poisson.solve(x)
 
         """ Compute u """
@@ -31,7 +30,7 @@ class NonLinearPoissonCase(unittest.TestCase):
         )
         assembler = pyfem.Assembler(model)
 
-        method=["direct","gmres"]
+        method = ["direct", "gmres"]
         for i in range(len(method)):
             u = assembler.solve_nonlinear(method=method[i], xdv=x)
 
@@ -42,15 +41,15 @@ class NonLinearPoissonCase(unittest.TestCase):
             pTu_ref = p.dot(u_ref)
             print(f"pTu    :{pTu}")
             print(f"pTu_ref:{pTu_ref}")
-            self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-6)
+            self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-8)
 
-            # Plot the u and the v displacements
-            fig, ax = plt.subplots(1, 2, figsize=(8, 4))
-            poisson.plot(u_ref, ax[0], levels=20)
-            ax[0].set_title(method[i]+'-u_ref')
-            assembler.plot(u, ax[1], levels=20)
-            ax[1].set_title(method[i]+'-u')
-            plt.show()
+            # # Plot the u and the v displacements
+            # fig, ax = plt.subplots(1, 2, figsize=(8, 4))
+            # poisson.plot(u_ref, ax[0], levels=20)
+            # ax[0].set_title(method[i] + "-u_ref")
+            # assembler.plot(u, ax[1], levels=20)
+            # ax[1].set_title(method[i] + "-u")
+            # plt.show()
 
         return
 

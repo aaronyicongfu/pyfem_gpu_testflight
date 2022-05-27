@@ -8,7 +8,6 @@ import matplotlib.tri as tri
 import pyamg
 import utils
 from utils import time_this
-from icecream import ic
 
 
 class QuadratureBase(ABC):
@@ -797,7 +796,11 @@ class NonlinearPoisson2D(ModelBase):
     def compute_rhs(self, xdv, u):
         # Compute element rhs vector -> rhs_e
         # self.rhs_e[...] = 0.0
-        self._compute_element_rhs( xdv, u, self.rhs_e,)
+        self._compute_element_rhs(
+            xdv,
+            u,
+            self.rhs_e,
+        )
 
         # Assemble the global rhs vector -> rhs
         self.rhs[...] = 0.0
@@ -814,10 +817,10 @@ class NonlinearPoisson2D(ModelBase):
             K: (sparse) global Jacobian matrix
         """
         # Compute element Jacobian -> Ke
-        self._compute_element_jacobian(xdv, u, self.Ke)
+        self._compute_element_jacobian(xdv, u, self.Ke_mat)
 
         # Assemble global Jacobian -> K
-        K = self._assemble_jacobian(self.Ke)
+        K = self._assemble_jacobian(self.Ke_mat)
         return K
 
     @time_this
@@ -852,7 +855,15 @@ class NonlinearPoisson2D(ModelBase):
         """
         xvals = Xq[..., 0]
         yvals = Xq[..., 1]
-        gfun_vals[...]  = 1e4 * xvals * (1.0 - xvals) * (1.0 - 2.0 * xvals) * yvals * (1.0 - yvals) * (1.0 - 2.0 * yvals)
+        gfun_vals[...] = (
+            1e4
+            * xvals
+            * (1.0 - xvals)
+            * (1.0 - 2.0 * xvals)
+            * yvals
+            * (1.0 - yvals)
+            * (1.0 - 2.0 * yvals)
+        )
 
         return
 
@@ -899,7 +910,7 @@ class NonlinearPoisson2D(ModelBase):
         Outputs:
             rhs_e: element-wise rhs, (nelems, nnodes_per_elem * nvars_per_node)
         """
-       # Compute shape function and derivatives
+        # Compute shape function and derivatives
         N = self.basis.eval_shape_fun()
 
         # Compute Jacobian derivatives
@@ -926,7 +937,7 @@ class NonlinearPoisson2D(ModelBase):
         # Allocate memory for quadrature function values
         if self.hfun_vals is None:
             self.hfun_vals = np.zeros(self.Xq.shape[0:-1])
-        
+
         # Compute g and h function values
         if self.gfun_vals is None:
             self.gfun_vals = np.zeros(self.Xq.shape[0:-1])
@@ -937,11 +948,11 @@ class NonlinearPoisson2D(ModelBase):
 
         wq = self.quadrature.get_weight()
         rhs_e[...] = np.einsum(
-            "nq,nqjl,nqkl,nk -> nj", 
+            "nq,nqjl,nqkl,nk -> nj",
             self.detJq * self.hfun_vals * (1.0 + uq**2) * wq,
             self.Ngrad,
             self.Ngrad,
-            ue
+            ue,
         )
         rhs_e[...] -= np.dot(self.detJq * wq * self.gfun_vals, N)
 
@@ -1002,11 +1013,11 @@ class NonlinearPoisson2D(ModelBase):
 
         wq = self.quadrature.get_weight()
         Ke[...] = np.einsum(
-            "nq,q,nqjl,nqkl -> njk", 
+            "nq,q,nqjl,nqkl -> njk",
             self.detJq * self.hfun_vals * (1.0 + uq**2),
             wq,
             self.Ngrad,
-            self.Ngrad
+            self.Ngrad,
         )
         Ke[...] += np.einsum(
             "nq,nqjl,nqkl,nk,qi -> nji",  # TODO, change ik to ki
@@ -1014,7 +1025,7 @@ class NonlinearPoisson2D(ModelBase):
             self.Ngrad,
             self.Ngrad,
             ue,
-            N
+            N,
         )
         return
 
@@ -1388,7 +1399,9 @@ class Assembler:
         return u
 
     @time_this
-    def solve_nonlinear(self, method="gmres", xdv=None, u0=None, tol=1e-10, atol=1e-12, max_iter=10):
+    def solve_nonlinear(
+        self, method="gmres", xdv=None, u0=None, tol=1e-10, atol=1e-12, max_iter=10
+    ):
         """
         Perform the static analysis
         """
@@ -1406,13 +1419,12 @@ class Assembler:
             # Apply Dirichlet boundary conditions
             self.model.apply_dirichlet_bcs(K, res, enforce_symmetric_K=False)
             res_norm = np.sqrt(np.dot(res, res))
-            print("pyfem", '{0:5d} {1:25.15e}'.format(k, res_norm))
+            print("pyfem", "{0:5d} {1:25.15e}".format(k, res_norm))
 
             if k == 0:
                 res_norm_init = res_norm
             elif res_norm < tol * res_norm_init or res_norm < atol:
                 break
-            
 
             update = self._solve_linear_system(K, res, method)
             u -= update
