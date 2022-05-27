@@ -7,6 +7,7 @@ import matplotlib.tri as tri
 import pyamg
 import utils
 from utils import time_this
+from icecream import ic
 
 
 class QuadratureBase(ABC):
@@ -731,11 +732,13 @@ class NonlinearPoisson2D(ModelBase):
         return
 
     @time_this
-    def compute_rhs(self):
+    def compute_rhs(self, xdv, u):
         # Compute element rhs vector -> rhs_e
-        self._compute_element_rhs(self.rhs_e)
+        # self.rhs_e[...] = 0.0
+        self._compute_element_rhs( xdv, u, self.rhs_e,)
 
         # Assemble the global rhs vector -> rhs
+        self.rhs[...] = 0.0
         self._assemble_rhs(self.rhs_e, self.rhs)
         return self.rhs
 
@@ -756,7 +759,7 @@ class NonlinearPoisson2D(ModelBase):
         return K
 
     @time_this
-    def compute_residual(self, xdv, u):
+    def compute_residual(self, u):
         """
         Compute the element residual vectors and assemble the global residual
         vector
@@ -768,7 +771,7 @@ class NonlinearPoisson2D(ModelBase):
             r: (ndarray) global residual vector
         """
         # Compute element residual -> Re
-        self._compute_element_residual(xdv, u, self.Re)
+        self._compute_element_residual(u, self.Re)
 
         # Assemble the global residual vector -> R
         R = np.zeros(self.nnodes)
@@ -787,15 +790,8 @@ class NonlinearPoisson2D(ModelBase):
         """
         xvals = Xq[..., 0]
         yvals = Xq[..., 1]
-        gfun_vals[...] = (
-            1e4
-            * xvals
-            * (1.0 - xvals)
-            * (1.0 - 2.0 * xvals)
-            * yvals
-            * (1.0 - yvals)
-            * (1.0 - 2.0 * yvals)
-        )
+        gfun_vals[...]  = 1e4 * xvals * (1.0 - xvals) * (1.0 - 2.0 * xvals) * yvals * (1.0 - yvals) * (1.0 - 2.0 * yvals)
+
         return
 
     @time_this
@@ -810,20 +806,20 @@ class NonlinearPoisson2D(ModelBase):
         Returns:
             hfun_vals: h function values for each quadrature, (nelems, nquads)
         """
+        hfun_vals[...] = 0.0
         xvals = Xq[..., 0]
         yvals = Xq[..., 1]
         num_x_vals = np.shape(xdv)[0]
-        hfun_vals = np.ones(xvals.shape)
         for k in range(num_x_vals):
             coef = special.binom(num_x_vals - 1, k)
             xarg = coef * (1.0 - xvals) ** (num_x_vals - 1 - k) * xvals**k
             yarg = 4.0 * yvals * (1.0 - yvals)
-            hfun_vals += xdv[k] * xarg * yarg
-
+            hfun_vals[...] += xdv[k] * xarg * yarg
+        hfun_vals[...] += 1.0
         return
 
     @time_this
-    def _compute_element_rhs(self, rhs_e):
+    def _compute_element_rhs(self, xdv, u, rhs_e):
         """
         Evaluate element-wise rhs vectors:
 
@@ -841,8 +837,10 @@ class NonlinearPoisson2D(ModelBase):
         Outputs:
             rhs_e: element-wise rhs, (nelems, nnodes_per_elem * nvars_per_node)
         """
-        # Compute shape function and derivatives
+       # Compute shape function and derivatives
         N = self.basis.eval_shape_fun()
+
+        # Compute Jacobian derivatives
         Nderiv = self.basis.eval_shape_fun_deriv()
 
         # Compute Jacobian transformation -> Jq
@@ -854,20 +852,41 @@ class NonlinearPoisson2D(ModelBase):
         # Compute element mapping -> Xq
         utils.compute_elem_interp(N, self.Xe, self.Xq)
 
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute element mapping u -> ue -> uq
+        ue = np.zeros((self.nelems, self.nnodes_per_elem))
+        uq = np.zeros((self.nelems, self.nnodes_per_elem))
+        utils.scatter_node_to_elem(self.conn, u, ue)
+        utils.compute_elem_interp(N, ue, uq)
+
         # Allocate memory for quadrature function values
+        if self.hfun_vals is None:
+            self.hfun_vals = np.zeros(self.Xq.shape[0:-1])
+        
+        # Compute g and h function values
         if self.gfun_vals is None:
             self.gfun_vals = np.zeros(self.Xq.shape[0:-1])
 
-        # Evaluate function g
+        # Evaluate function h
+        self._compute_hfun(xdv, self.Xq, self.hfun_vals)
         self._compute_gfun(self.Xq, self.gfun_vals)
 
-        # Compute element rhs
         wq = self.quadrature.get_weight()
-        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.gfun_vals)
+        rhs_e[...] = np.einsum(
+            "nq,nqjl,nqkl,nk -> nj", 
+            self.detJq * self.hfun_vals * (1.0 + uq**2) * wq,
+            self.Ngrad,
+            self.Ngrad,
+            ue
+        )
+        rhs_e[...] -= np.dot(self.detJq * wq * self.gfun_vals, N)
+
         return
 
     @time_this
-    def _compute_element_jacobian(self, num_x_vals, xdv, u, Ke):
+    def _compute_element_jacobian(self, xdv, u, Ke):
         """
         Evaluate element-wise Jacobian matrices:
         Args:
@@ -900,6 +919,9 @@ class NonlinearPoisson2D(ModelBase):
         # Compute Jacobian determinant -> detJq
         utils.compute_jdet(self.Jq, self.detJq)
 
+        # Compute element mapping -> Xq
+        utils.compute_elem_interp(N, self.Xe, self.Xq)
+
         # Compute shape function gradient -> (invJq), Ngrad
         utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
 
@@ -917,25 +939,25 @@ class NonlinearPoisson2D(ModelBase):
         self._compute_hfun(xdv, self.Xq, self.hfun_vals)
 
         wq = self.quadrature.get_weight()
-        Ke = np.einsum(
-            "nq,q,nqjl,nqkl -> njk",
+        Ke[...] = np.einsum(
+            "nq,q,nqjl,nqkl -> njk", 
             self.detJq * self.hfun_vals * (1.0 + uq**2),
             wq,
             self.Ngrad,
-            self.Ngrad,
+            self.Ngrad
         )
-        Ke += np.einsum(
-            "nq,q,nqjl,nqkl,ik -> nji",  # TODO, change ik to ki
-            2.0 * self.detJq * self.hfun_vals * uq,
-            wq,
+        Ke[...] += np.einsum(
+            "nq,nqjl,nqkl,nk,qi -> nji",  # TODO, change ik to ki
+            2.0 * self.detJq * self.hfun_vals * uq * wq,
             self.Ngrad,
             self.Ngrad,
-            uq,
+            ue,
+            N
         )
         return
 
     @time_this
-    def _compute_element_residual(self, xdv, u, Re):
+    def _compute_element_residual(self, u, Re):
         """
         Evaluate element-wise residual matrices:
         Args:
@@ -965,6 +987,9 @@ class NonlinearPoisson2D(ModelBase):
         # Compute Jacobian determinant -> detJq
         utils.compute_jdet(self.Jq, self.detJq)
 
+        # Compute element mapping -> Xq
+        utils.compute_elem_interp(N, self.Xe, self.Xq)
+
         # Compute shape function gradient -> (invJq), Ngrad
         utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
 
@@ -974,34 +999,18 @@ class NonlinearPoisson2D(ModelBase):
         utils.scatter_node_to_elem(self.conn, u, ue)
         utils.compute_elem_interp(N, ue, uq)
 
-        # Allocate memory for quadrature function values
-        if self.hfun_vals is None:
-            self.hfun_vals = np.zeros(self.Xq.shape[0:-1])
+        # Compute g and h function values
+        if self.gfun_vals is None:
+            self.gfun_vals = np.zeros(self.Xq.shape[0:-1])
 
         # Evaluate function h
-        self._compute_hfun(xdv, self.Xq, self.hfun_vals)
+        self._compute_gfun(self.Xq, self.gfun_vals)
 
         wq = self.quadrature.get_weight()
-
-        # Compute left hand side
-        lhs_e = np.einsum(
-            "nq,q,nqjl,nqkl,nk -> nj",
-            self.detJq * self.hfun_vals * (1.0 + uq**2),
-            wq,
-            self.Ngrad,
-            self.Ngrad,
-            ue,
-        )
-
-        # Compute right-hand side
-        self._compute_element_rhs(self.rhs_e)
-
-        # Compute residual
-        Re = lhs_e - self.rhs_e
+        Re[...] = np.dot(self.detJq * wq * self.gfun_vals, N)
         return
 
 
-class PlaneStress2D(ModelBase):
 class LinearElasticity(ModelBase):
     """
     The linear elasticity equation, if is 2-dimensional problem, then plane
@@ -1187,18 +1196,11 @@ class Assembler:
         return
 
     @time_this
-    def solve(self, method="gmres", nonlinear=False, num=10):
+    def solve(self, method="gmres"):
         """
         Perform the static analysis
         """
-        # # Construct the linear system
-        # if nonlinear:
-        #     num = min(10, max(num, 2))
-        #     xdv = np.ones(num)/num
-        #     u = np.ones(self.model.nnodes)
-        #     K = self.model.compute_jacobian(xdv, u)
-        #     rhs = self.model.compute_rhs()
-
+        # Construct the linear system
         K = self.model.compute_jacobian()
         rhs = self.model.compute_rhs()
 
@@ -1207,6 +1209,38 @@ class Assembler:
 
         # Solve the linear system
         u = self._solve_linear_system(K, rhs, method)
+        return u
+
+    @time_this
+    def solve_nonlinear(self, method="gmres", xdv=None, u0=None, tol=1e-10, atol=1e-12, max_iter=10):
+        """
+        Perform the static analysis
+        """
+        # Set the initial guess as u = 0
+        if u0 is None:
+            u = np.zeros(self.model.nnodes)
+        else:
+            u = u0
+
+        for k in range(max_iter):
+            # Construct the linear system
+            K = self.model.compute_jacobian(xdv, u)
+            res = self.model.compute_rhs(xdv, u)
+
+            # Apply Dirichlet boundary conditions
+            self.model.apply_dirichlet_bcs(K, res, enforce_symmetric_K=False)
+            res_norm = np.sqrt(np.dot(res, res))
+            print("pyfem", '{0:5d} {1:25.15e}'.format(k, res_norm))
+
+            if k == 0:
+                res_norm_init = res_norm
+            elif res_norm < tol * res_norm_init or res_norm < atol:
+                break
+            
+
+            update = self._solve_linear_system(K, res, method)
+            u -= update
+
         return u
 
     @time_this

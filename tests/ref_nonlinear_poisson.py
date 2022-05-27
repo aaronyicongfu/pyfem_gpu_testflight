@@ -4,6 +4,7 @@ from scipy import special
 from scipy.sparse.linalg import spsolve
 import matplotlib.pylab as plt
 import matplotlib.tri as tri
+from icecream import ic
 
 class PoissonProblem:
     def __init__(self, N):
@@ -21,7 +22,6 @@ class PoissonProblem:
         """
         Given the design variables and the x and y locations return h
         """
-
         h = np.ones(xvals.shape, dtype=xdv.dtype)
         for k in range(self.N):
             coef = special.binom(self.N - 1, k)
@@ -217,7 +217,6 @@ class NonlinearPoisson:
 
         # Set the state variable for all the elements
         ue = u[self.conn]
-
         for j in range(2):
             for i in range(2):
                 xi = gauss_pts[i]
@@ -242,11 +241,9 @@ class NonlinearPoisson:
                 g = self.problem.gfunc(xvals, yvals)
                 h = self.problem.hfunc(xdv, xvals, yvals)
 
-                # Add the contributions to the residuals
                 Re += np.einsum('n,nij,nil,nl -> nj', detJ * h * (1.0 + uvals**2), Be, Be, ue)
                 Re -= np.outer(detJ * g, N)
 
-                # This is a fancy (and fast) way to compute the element matrices
                 Ke += np.einsum('n,nij,nil -> njl', detJ * h * (1.0 + uvals**2), Be, Be)
                 Ke += np.einsum('n,nij,nil,nl,k -> njk', 2.0 * detJ * h * uvals, Be, Be, ue, N)
 
@@ -380,7 +377,7 @@ class NonlinearPoisson:
             u = u0
 
         res_norm_init = 0.0
-        print('{0:5s} {1:25s}'.format('Iter', 'Norm'))
+        print("ref", '{0:5s} {1:25s}'.format('Iter', 'Norm'))
 
         for k in range(max_iter):
             res, K = self.assemble_jacobian(xdv, u)
@@ -399,7 +396,6 @@ class NonlinearPoisson:
 
             update = np.zeros(self.nvars, dtype=dtype)
             update[self.reduced] = updater
-
             u -= update
 
         return u
@@ -457,65 +453,65 @@ class NonlinearPoisson:
 
         return
 
-n = 75
-nelems = n**2
-nnodes = (n + 1)*(n + 1)
-y = np.linspace(0, 1, n + 1)
-x = np.linspace(0, 1, n + 1)
-nodes = np.arange(0, (n + 1)*(n + 1)).reshape((n + 1, n + 1))
+# n = 75
+# nelems = n**2
+# nnodes = (n + 1)*(n + 1)
+# y = np.linspace(0, 1, n + 1)
+# x = np.linspace(0, 1, n + 1)
+# nodes = np.arange(0, (n + 1)*(n + 1)).reshape((n + 1, n + 1))
 
-# Set the node locations
-X = np.zeros((nnodes, 2))
-for j in range(n + 1):
-    for i in range(n + 1):
-        X[i + j*(n + 1), 0] = x[i]
-        X[i + j*(n + 1), 1] = y[j]
+# # Set the node locations
+# X = np.zeros((nnodes, 2))
+# for j in range(n + 1):
+#     for i in range(n + 1):
+#         X[i + j*(n + 1), 0] = x[i]
+#         X[i + j*(n + 1), 1] = y[j]
 
-# Set the connectivity
-conn = np.zeros((nelems, 4), dtype=int)
-for j in range(n):
-    for i in range(n):
-        conn[i + j*n, 0] = nodes[j, i]
-        conn[i + j*n, 1] = nodes[j, i + 1]
-        conn[i + j*n, 2] = nodes[j + 1, i + 1]
-        conn[i + j*n, 3] = nodes[j + 1, i]
+# # Set the connectivity
+# conn = np.zeros((nelems, 4), dtype=int)
+# for j in range(n):
+#     for i in range(n):
+#         conn[i + j*n, 0] = nodes[j, i]
+#         conn[i + j*n, 1] = nodes[j, i + 1]
+#         conn[i + j*n, 2] = nodes[j + 1, i + 1]
+#         conn[i + j*n, 3] = nodes[j + 1, i]
 
-# Set the constrained degrees of freedom at each node
-bcs = []
-for j in range(n+1):
-    bcs.append(nodes[j, 0])
-    bcs.append(nodes[j, -1])
-    bcs.append(nodes[0, j])
-    bcs.append(nodes[-1, j])
+# # Set the constrained degrees of freedom at each node
+# bcs = []
+# for j in range(n+1):
+#     bcs.append(nodes[j, 0])
+#     bcs.append(nodes[j, -1])
+#     bcs.append(nodes[0, j])
+#     bcs.append(nodes[-1, j])
 
-# Make the boundary conditions unique
-bcs = np.unique(bcs)
+# # Make the boundary conditions unique
+# bcs = np.unique(bcs)
 
-problem = PoissonProblem(10)
+# problem = PoissonProblem(10)
 
-# Create the Poisson problem
-poisson = NonlinearPoisson(conn, X, bcs, problem)
+# # Create the Poisson problem
+# poisson = NonlinearPoisson(conn, X, bcs, problem)
 
-x = np.ones(problem.N)/problem.N
-u = np.ones(poisson.nvars)
+# x = np.ones(problem.N)/problem.N
+# u = np.ones(poisson.nvars)
 
-# Set the perturbation direction
-p = np.zeros(poisson.nvars)
-p[nodes] = X[nodes, 0] + X[nodes, 1] + X[nodes, 0]*X[nodes, 1]
+# # Set the perturbation direction
+# p = np.zeros(poisson.nvars)
+# p[nodes] = X[nodes, 0] + X[nodes, 1] + X[nodes, 0]*X[nodes, 1]
 
-res, J = poisson.assemble_jacobian(x, u)
-Jp = J.dot(p)
+# res, J = poisson.assemble_jacobian(x, u)
+# Jp = J.dot(p)
 
-eps = 1e-30
-fd = poisson.assemble_residual(x, u + 1j * eps * p).imag/eps
+# eps = 1e-30
+# fd = poisson.assemble_residual(x, u + 1j * eps * p).imag/eps
 
-for i in range(10):
-    print('{0:25.15e} {1:25.15e} {2:25.15e}'.format(fd[i], Jp[i], (fd[i] - Jp[i])/fd[i]))
+# for i in range(10):
+#     print('{0:25.15e} {1:25.15e} {2:25.15e}'.format(fd[i], Jp[i], (fd[i] - Jp[i])/fd[i]))
 
-u = poisson.solve(x)
-poisson.plot(u)
+# u = poisson.solve(x)
+# poisson.plot(u)
 
-for pval in [1.0, 10, 100, 500]:
-    print('KS value: {0:20.10f} max: {1:20.10f}'.format(poisson.eval_ks(pval, u), np.max(u)))
-    psi = poisson.solve_adjoint(x, u, pval=pval)
-    poisson.plot(psi)
+# for pval in [1.0, 10, 100, 500]:
+#     print('KS value: {0:20.10f} max: {1:20.10f}'.format(poisson.eval_ks(pval, u), np.max(u)))
+#     psi = poisson.solve_adjoint(x, u, pval=pval)
+#     poisson.plot(psi)
