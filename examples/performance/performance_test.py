@@ -12,6 +12,9 @@ p.add_argument("--problem", default="poisson", choices=["poisson", "elasticity"]
 p.add_argument("--method", default="gmres", choices=["gmres", "direct"])
 args = p.parse_args()
 
+# Switch on timer
+utils.timer_on()
+
 creator = pyfem.ProblemCreator(nnodes_x=args.nx, nnodes_y=args.ny)
 quadrature = pyfem.QuadratureBilinear2D()
 basis = pyfem.BasisBilinear2D(quadrature)

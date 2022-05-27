@@ -6,12 +6,15 @@ import sys
 from os.path import abspath, join, dirname
 
 sys.path.append("../..")
-import pyfem
+import pyfem, utils
 import matplotlib.pyplot as plt
 import numpy as np
 from parse_inp import InpParser
 
 if __name__ == "__main__":
+    # Switch on timer
+    utils.timer_on()
+
     # Parse the inp file
     inp_file = "arm.inp"
     inp_parser = InpParser(join(dirname(abspath(__file__)), inp_file))
