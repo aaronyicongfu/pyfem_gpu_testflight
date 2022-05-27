@@ -1,3 +1,4 @@
+from time import time
 import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import spsolve, gmres
@@ -706,8 +707,10 @@ class LinearPoisson2D(ModelBase):
         # Evaluate function g
         self._compute_gfun(self.Xq, self.fun_vals)
 
-        # Compute element rhs
+        # Get quadrature weights
         wq = self.quadrature.get_weight()
+
+        # Compute element rhs
         rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.fun_vals)
         return
 
@@ -735,7 +738,9 @@ class LinearPoisson2D(ModelBase):
         # Compute shape function gradient -> (invJq), Ngrad
         utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
 
+        # Get quadrature weights
         wq = self.quadrature.get_weight()
+
         Ke[...] = np.einsum(
             "iq,q,iqjl,iqkl -> ijk", self.detJq, wq, self.Ngrad, self.Ngrad
         )
@@ -833,7 +838,7 @@ class LinearElasticity(ModelBase):
         return K
 
     @time_this
-    def _compute_element_B(self, Ngrad, Be):
+    def _compute_element_Bmat(self, Ngrad, Be):
         """
         Compute element B matrix
 
@@ -905,9 +910,11 @@ class LinearElasticity(ModelBase):
         utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
 
         # Compute Be matrix -> Be
-        self._compute_element_B(self.Ngrad, self.Be)
+        self._compute_element_Bmat(self.Ngrad, self.Be)
 
+        # Get quadrature weights
         wq = self.quadrature.get_weight()
+
         # path, info = np.einsum_path(
         #     "iq,q,iqnj,nm,iqmk->ijk",
         #     self.detJq,
@@ -926,6 +933,103 @@ class LinearElasticity(ModelBase):
             self.Be,
             optimize=True,
         )
+        return
+
+
+class Helmholtz(ModelBase):
+    """
+    Solve the 2- or 3-dimensional Helmholtz equation:
+    -r^2 ∆rho + rho = x
+
+    with (usually naturally satisfied) Neumann boundary condition:
+    drho/dn = 0
+
+    Helmholtz equation can be used a the filter method for topology optimization
+    applications. In this case, x is the (nodal) raw design variable, and rho
+    is the filtered density field, with r controlling the ``filter radius''
+    """
+
+    @time_this
+    def __init__(
+        self, r0, nodes, X, conn, quadrature: QuadratureBase, basis: BasisBase
+    ):
+        """
+        Inputs:
+            r0: filter radius
+        """
+        super().__init__(1, nodes, X, conn, [], None, quadrature, basis)
+
+        self.r0 = r0
+        self.Re = np.zeros((self.nelems, self.nnodes_per_elem, self.nnodes_per_elem))
+        self._compute_element_jacobian_and_rhs(self.Ke_mat, self.Re)
+        self.R = self._assemble_jacobian(self.Re)
+        self.K = self._assemble_jacobian(self.Ke_mat)
+        return
+
+    @time_this
+    def apply(self, x):
+        """
+        Apply the Helmholtz filter to x -> rho
+        """
+        return spsolve(self.K, self.compute_rhs(x))
+
+    @time_this
+    def compute_rhs(self, x):
+        self.rhs[:] = self.R.dot(x)
+        return self.rhs
+
+    @time_this
+    def compute_jacobian(self):
+        return self.K
+
+    @time_this
+    def _compute_element_jacobian_and_rhs(self, Ke, Re):
+        """
+        Evaluate element-wise Jacobian matrices and rhs, where
+
+
+            Ke = ∑ detJq wq [r**2 (NxNxT + NyNyT) + NNT]_q
+                 q
+
+            Re = [∑ detJq wq (NNT)_q]
+                  q
+
+        Outputs:
+            Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
+                ndof_per_node, nnodes_per_elem * ndof_per_node)
+            Re: element-wise matrix for rhs, (nelems, nnodes_per_elem *
+                ndof_per_node, nnodes_per_elem * ndof_per_node)
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Get quadrature weights
+        wq = self.quadrature.get_weight()
+
+        # Get shape functions
+        N = self.basis.eval_shape_fun()
+
+        Re[...] = np.einsum("iq,q,qj,qk -> ijk", self.detJq, wq, N, N)
+
+        Ke[...] = np.einsum(
+            "iq,q,iqjl,iqkl -> ijk",
+            self.detJq * self.r0**2,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+        )
+
+        Ke[...] += Re[...]
+
         return
 
 
@@ -1113,6 +1217,7 @@ class ProblemCreator:
         self.nnodes_x = nnodes_x
         self.nnodes_y = nnodes_y
         self.nnodes_z = nnodes_z
+        self.nnodes = nnodes_x * nnodes_y * nnodes_z
         self.nodes3d = nodes3d
         self.nodes = nodes3d.flatten()
         self.conn = conn
@@ -1147,3 +1252,21 @@ class ProblemCreator:
             # nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
 
         return self.nodes, self.conn, self.X, dof_fixed, nodal_force
+
+    @time_this
+    def create_helmhotz_problem(self):
+        x = np.zeros(self.nnodes)
+        idx = 0
+        for k in range(self.nnodes_z):
+            for j in range(self.nnodes_y):
+                for i in range(self.nnodes_x):
+                    if (
+                        i < self.nnodes_x / 2
+                        and j < self.nnodes_y / 2
+                        and k < self.nnodes_z / 2
+                    ):
+                        x[idx] = 0.95
+                    else:
+                        x[idx] = 1e-3
+                    idx += 1
+        return self.nodes, self.conn, self.X, x
