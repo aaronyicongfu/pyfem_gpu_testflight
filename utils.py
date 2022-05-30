@@ -165,7 +165,7 @@ def compute_basis_grad(Jq, detJq, Nderiv, invJq, Ngrad):
 
 
 @time_this
-def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
+def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, conn):
     """
     Compute dof, dof_each_node and conn_dof
 
@@ -174,7 +174,6 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
         nelems
         nnodes_per_elem
         ndof_per_node
-        nodes
         conn
 
     Return:
@@ -182,6 +181,7 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
         dof_each_node: the reshaped dof, (nnodes, ndof_per_node)
         conn_dof: nodal dof for each element, (nelems, nnodes_per_elem * ndof_per_node)
     """
+    nodes = np.arange(nnodes)
     if ndof_per_node == 1:
         dof = nodes
         dof_each_node = nodes
@@ -198,9 +198,9 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
     return dof, dof_each_node, conn_dof
 
 
-def to_vtk(nodes, conn, X, nodal_sol={}, vtk_name="problem.vtk"):
+def to_vtk(conn, X, nodal_sol={}, vtk_name="problem.vtk"):
     """
-    Generate a vtk given nodes, conn, X, and optionally nodal_sol
+    Generate a vtk given conn, X, and optionally nodal_sol
 
     Inputs:
         nnodes: ndarray
@@ -262,7 +262,7 @@ def to_vtk(nodes, conn, X, nodal_sol={}, vtk_name="problem.vtk"):
     if X.shape[1] == 2:
         X = np.append(X, np.zeros((X.shape[0], 1)), axis=1)
 
-    nnodes = len(nodes)
+    nnodes = X.shape[0]
     nelems = np.sum([len(c) for c in conn.values()])
 
     # Create a empty vtk file and write headers

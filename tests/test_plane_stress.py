@@ -24,7 +24,6 @@ class PlaneStressCase(unittest.TestCase):
         # Compute u
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
         (
-            nodes,
             conn,
             X,
             dof_fixed,
@@ -33,7 +32,7 @@ class PlaneStressCase(unittest.TestCase):
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
         model = pyfem.LinearElasticity(
-            nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
+            X, conn, dof_fixed, None, nodal_force, quadrature, basis
         )
         assembler = pyfem.Assembler(model)
         u = assembler.solve(method="direct")

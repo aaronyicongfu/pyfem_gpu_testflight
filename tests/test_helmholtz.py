@@ -12,13 +12,13 @@ class Helmholtz2D(unittest.TestCase):
     def test_helmholtz_filter(self):
         # Set up problem
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32, element_type="quad")
-        nodes, conn, X, x = creator.create_helmhotz_problem()
+        conn, X, x = creator.create_helmhotz_problem()
         r0 = 0.1
 
         # Compute u
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.Helmholtz(0.1, nodes, X, conn, quadrature, basis)
+        model = pyfem.Helmholtz(0.1, X, conn, quadrature, basis)
         u = model.apply(x)
 
         # Compute u_ref

@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 def solve_helmholtz_problem(ax, element_type="quad"):
     creator = pyfem.ProblemCreator(nnodes_x=96, nnodes_y=96, element_type=element_type)
-    nodes, conn, X, x = creator.create_helmhotz_problem()
+    conn, X, x = creator.create_helmhotz_problem()
 
     if element_type == "quad":
         quadrature = pyfem.QuadratureBilinear2D()
@@ -20,7 +20,7 @@ def solve_helmholtz_problem(ax, element_type="quad"):
         quadrature = pyfem.QuadratureTriangle2D()
         basis = pyfem.BasisTriangle2D(quadrature)
 
-    model = pyfem.Helmholtz(0.05, nodes, X, conn, quadrature, basis)
+    model = pyfem.Helmholtz(0.05, X, conn, quadrature, basis)
     assembler = pyfem.Assembler(model)
     u = model.apply(x)
     assembler.plot(u, ax)

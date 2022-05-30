@@ -18,7 +18,7 @@ if __name__ == "__main__":
     # Parse the inp file
     inp_file = "arm.inp"
     inp_parser = InpParser(join(dirname(abspath(__file__)), inp_file))
-    nodes, conn, X, groups = inp_parser.parse()
+    conn, X, groups = inp_parser.parse()
 
     # Since the problem is 2-dimensional, we only need first 2 coordinates
     X = X[:, 0:2]
@@ -38,7 +38,7 @@ if __name__ == "__main__":
 
     # Create the 2-dimensional plane stress physical model
     model = pyfem.LinearElasticity(
-        nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
+        X, conn, dof_fixed, None, nodal_force, quadrature, basis
     )
 
     # Create the problem assembler

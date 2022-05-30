@@ -11,12 +11,10 @@ class LinearPoissonCase(unittest.TestCase):
     def test_linear_poisson(self):
         # Compute u
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
-        nodes, conn, X, dof_fixed = creator.create_poisson_problem()
+        conn, X, dof_fixed = creator.create_poisson_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.LinearPoisson2D(
-            nodes, X, conn, dof_fixed, None, quadrature, basis
-        )
+        model = pyfem.LinearPoisson2D(X, conn, dof_fixed, None, quadrature, basis)
         assembler = pyfem.Assembler(model)
         u = assembler.solve(method="direct")
 

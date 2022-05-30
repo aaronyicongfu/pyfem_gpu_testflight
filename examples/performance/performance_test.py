@@ -20,12 +20,12 @@ quadrature = pyfem.QuadratureBilinear2D()
 basis = pyfem.BasisBilinear2D(quadrature)
 
 if args.problem == "poisson":
-    nodes, conn, X, dof_fixed = creator.create_poisson_problem()
-    model = pyfem.LinearPoisson2D(nodes, X, conn, dof_fixed, None, quadrature, basis)
+    conn, X, dof_fixed = creator.create_poisson_problem()
+    model = pyfem.LinearPoisson2D(X, conn, dof_fixed, None, quadrature, basis)
 else:
-    nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
+    conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
     model = pyfem.LinearElasticity(
-        nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
+        X, conn, dof_fixed, None, nodal_force, quadrature, basis
     )
 
 assembler = pyfem.Assembler(model)

@@ -317,7 +317,6 @@ class ModelBase(ABC):
     def __init__(
         self,
         ndof_per_node,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -327,7 +326,6 @@ class ModelBase(ABC):
     ):
         """
         ndof_per_node: int, number of component of state variable
-        nodes: 0-based nodal indices, (nnodes, )
         X: nodal location matrix, (nnodes, ndims)
         conn: connectivity matrix, (nelems, nnodes_per_elem)
         dof_fixed: list of dof indices to enforce boundary condition, (Ndof_bc, )
@@ -335,7 +333,6 @@ class ModelBase(ABC):
                         values are 0
         """
         self.ndof_per_node = ndof_per_node
-        self.nodes = np.array(nodes, dtype=int)
         self.X = np.array(X, dtype=float)
         self.conn = np.array(conn, dtype=int)
         self.dof_fixed = np.array(dof_fixed, dtype=int)
@@ -353,15 +350,12 @@ class ModelBase(ABC):
         self.ndims = X.shape[1]
         self.nquads = quadrature.get_nquads()
 
-        # Sanity check: nodes
-        assert len(self.nodes.shape) == 1  # shape check
-        assert self.nodes.min() == 0  # 0-based index check
-        assert self.nodes.max() == self.nodes.shape[0] - 1  # no-skip check
-        assert len(self.nodes) == len(set(self.nodes))  # no-duplicate check
+        # Set nodal numbering
+        self.nodes = np.arange(self.nnodes)
 
         # Sanity check: conn
         assert self.conn.min() == 0
-        assert self.conn.max() == self.nodes.shape[0] - 1
+        assert self.conn.max() == self.nnodes - 1
         assert len(set(self.conn.flatten())) == self.nnodes
 
         """
@@ -373,7 +367,6 @@ class ModelBase(ABC):
             self.nelems,
             self.nnodes_per_elem,
             self.ndof_per_node,
-            self.nodes,
             self.conn,
         )
 
@@ -629,7 +622,6 @@ class LinearPoisson2D(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -639,7 +631,7 @@ class LinearPoisson2D(ModelBase):
     ):
         ndof_per_node = 1
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
         self.fun_vals = None
         return
@@ -774,7 +766,6 @@ class NonlinearPoisson2D(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -784,7 +775,7 @@ class NonlinearPoisson2D(ModelBase):
     ):
         ndof_per_node = 1
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
         self.gfun_vals = None
         self.hfun_vals = None
@@ -1101,7 +1092,6 @@ class LinearElasticity(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -1117,7 +1107,7 @@ class LinearElasticity(ModelBase):
 
         # Call base class's constructor
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
 
         # Plane stress-specific variables
@@ -1286,14 +1276,12 @@ class Helmholtz(ModelBase):
     """
 
     @time_this
-    def __init__(
-        self, r0, nodes, X, conn, quadrature: QuadratureBase, basis: BasisBase
-    ):
+    def __init__(self, r0, X, conn, quadrature: QuadratureBase, basis: BasisBase):
         """
         Inputs:
             r0: filter radius
         """
-        super().__init__(1, nodes, X, conn, [], None, quadrature, basis)
+        super().__init__(1, X, conn, [], None, quadrature, basis)
 
         self.r0 = r0
         self.Re = np.zeros((self.nelems, self.nnodes_per_elem, self.nnodes_per_elem))
@@ -1588,7 +1576,6 @@ class ProblemCreator:
         self.nnodes_z = nnodes_z
         self.nnodes = nnodes_x * nnodes_y * nnodes_z
         self.nodes3d = nodes3d
-        self.nodes = nodes3d.flatten()
         self.conn = conn
         self.X = X[:, 0 : self.ndims]
 
@@ -1602,7 +1589,7 @@ class ProblemCreator:
             for j in range(self.nnodes_y):
                 dof_fixed.append(self.nodes3d[k, j, 0])
                 dof_fixed.append(self.nodes3d[k, j, -1])
-        return self.nodes, self.conn, self.X, dof_fixed
+        return self.conn, self.X, dof_fixed
 
     @time_this
     def create_linear_elasticity_problem(self):
@@ -1620,7 +1607,7 @@ class ProblemCreator:
                 nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
             # nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
 
-        return self.nodes, self.conn, self.X, dof_fixed, nodal_force
+        return self.conn, self.X, dof_fixed, nodal_force
 
     @time_this
     def create_helmhotz_problem(self):
@@ -1638,4 +1625,4 @@ class ProblemCreator:
                     else:
                         x[idx] = 1e-3
                     idx += 1
-        return self.nodes, self.conn, self.X, x
+        return self.conn, self.X, x
