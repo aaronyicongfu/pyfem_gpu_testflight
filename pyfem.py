@@ -1357,6 +1357,99 @@ class Helmholtz(ModelBase):
         return
 
 
+class A2DWrapper(ModelBase):
+    """
+    An experimental class that wraps around a2d (https://github.com/gjkennedy/a2d)
+    """
+
+    @time_this
+    def __init__(self, X, conn, dof_fixed, dof_fixed_vals, a2d, problem_info):
+        """
+        Inputs:
+            ...
+            a2d: the a2d library
+            problem_info: the problem information, dictionary
+                          problem_info = {
+                              'type': 'elasticity',
+                              'E': E,
+                              'nu': nu
+                          }
+                          or
+                          problem_info = {
+                              'type': 'helmholtz',
+                              'r0': r0
+                          }
+
+        """
+
+        nelems = conn.shape[0]
+        nnodes = X.shape[0]
+
+        if problem_info["type"] == "elasticity":
+            a2dmodel = a2d.Elasticity(nelems, nnodes)
+        elif problem_info["type"] == "helmholtz":
+            a2dmodel = a2d.Helmholtz(nelems, nnodes)
+        else:
+            raise ValueError(f"Unknown problem_info {problem_info}")
+
+        # Set connectivity numpy array and update underlying c++ data
+        self.conn = np.array(a2dmodel.get_conn(), copy=False)
+        self.conn[:] = conn[:]
+
+        # Set nodal location numpy array and update underlying c++ data
+        self.X = np.array(a2dmodel.get_nodes(), copy=False)
+        self.X[:] = X[:]
+        a2dmodel.reset_nodes()  # Required after node location change
+
+        # Set material property numpy array and update underlying c++ data
+        self.data = np.array(a2dmodel.get_quad_data(), copy=False)
+        if problem_info["type"] == "elasticity":
+            E = problem_info["E"]
+            nu = problem_info["nu"]
+            mu = E / (2 * (1 + nu))
+            lam = E * nu / (1 + nu) / (1 - 2 * nu)
+            self.data[:, :, 0] = mu  # Lame parameter: mu
+            self.data[:, :, 1] = lam  # Lame parameter: lambda
+        elif problem_info["type"] == "helmholtz":
+            self.data[:] = problem_info["r0"]
+
+        # Set solution numpy array and update underlying c++ data
+        self.U = np.array(a2dmodel.get_solution(), copy=False)
+        self.U[:] = 0.0
+        a2dmodel.reset_solution()  # Required after solution change
+
+        # Set element-wise Jacobian numpy array and update underlying c++ data
+        self.jac = np.array(a2dmodel.get_elem_jac(), copy=False)
+        self.jac[:] = 0.0
+
+        self.a2dmodel = a2dmodel
+
+        # Call constructor for the parent class, note that for now only 8-node
+        # block element is supported
+        ndof_per_node = self.U.shape[-1]
+        quadrature = QuadratureBlock3D()
+        basis = BasisBlock3D(quadrature)
+        super().__init__(
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+        )
+
+    @time_this
+    def compute_rhs(self):
+        return None  # TODO
+
+    @time_this
+    def compute_jacobian(self):
+        self._compute_jacobian_tensor()
+        self._jacobian_tensor_to_mat(self.jac, self.Ke_mat)
+        K = self._assemble_jacobian(self.Ke_mat)
+        return K
+
+    @time_this
+    def _compute_jacobian_tensor(self):
+        self.a2dmodel.add_jacobians()
+        return
+
+
 class Assembler:
     @time_this
     def __init__(self, model: ModelBase):

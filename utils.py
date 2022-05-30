@@ -18,6 +18,14 @@ class MyLogger:
         MyLogger.print_to_stdout = True
         return
 
+    def timer_off():
+        """
+        Call this function before execution to switch off the profiler
+        and print execution time for functions to stdout
+        """
+        MyLogger.print_to_stdout = False
+        return
+
     @staticmethod
     def time_this(func):
         """
@@ -49,6 +57,7 @@ class MyLogger:
 
 time_this = MyLogger.time_this
 timer_on = MyLogger.timer_on
+timer_off = MyLogger.timer_off
 
 
 @time_this
