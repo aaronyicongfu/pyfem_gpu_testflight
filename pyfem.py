@@ -151,7 +151,6 @@ class BasisBase(ABC):
         shape_derivs = []
         return shape_derivs
 
-    @time_this
     def eval_shape_fun(self):
         """
         Evaluate the shape function values at quadrature points
@@ -166,7 +165,6 @@ class BasisBase(ABC):
             )
         return self.N
 
-    @time_this
     def eval_shape_fun_deriv(self):
         """
         Evaluate the shape function derivatives at quadrature points
@@ -191,7 +189,6 @@ class BasisBilinear2D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
-    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [
             0.25 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
@@ -201,7 +198,6 @@ class BasisBilinear2D(BasisBase):
         ]
         return shape_vals
 
-    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [
             # fmt: off
@@ -225,7 +221,6 @@ class BasisBlock3D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
-    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [
             0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]) * (1.0 - qpt[2]),
@@ -239,7 +234,6 @@ class BasisBlock3D(BasisBase):
         ]
         return shape_vals
 
-    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [
             # fmt: off

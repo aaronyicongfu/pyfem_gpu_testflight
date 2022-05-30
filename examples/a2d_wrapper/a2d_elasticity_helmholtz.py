@@ -13,7 +13,7 @@ import example as a2d
 utils.timer_on()
 
 # Set up mesh
-creator = pyfem.ProblemCreator(8, 4, 4, element_type="block")
+creator = pyfem.ProblemCreator(64, 32, 32, element_type="block")
 conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 """
