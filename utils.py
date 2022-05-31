@@ -3,6 +3,7 @@ Utility functions for profiling, data scattering, coordinate transformation, etc
 """
 from time import perf_counter_ns
 import numpy as np
+import os
 
 
 class MyLogger:
@@ -13,6 +14,8 @@ class MyLogger:
     istart = []  # stack of indices of open parantheses
     pairs = {}
     t_min = 1  # unit: ms
+    log_name = "profiler.log"
+    old_log_removed = False
 
     @staticmethod
     def timer_set_threshold(t: float):
@@ -111,7 +114,13 @@ class MyLogger:
                     for txt in keep_buffer:
                         print(txt["msg"])
                 else:
-                    with open("profiler.log", "a") as f:
+                    if (
+                        os.path.exists(MyLogger.log_name)
+                        and not MyLogger.old_log_removed
+                    ):
+                        os.remove(MyLogger.log_name)
+                        MyLogger.old_log_removed = True
+                    with open(MyLogger.log_name, "a") as f:
                         for txt in keep_buffer:
                             f.write(txt["msg"] + "\n")
 
@@ -127,6 +136,7 @@ time_this = MyLogger.time_this
 timer_on = MyLogger.timer_on
 timer_off = MyLogger.timer_off
 timer_to_stdout = MyLogger.timer_to_stdout
+timer_set_threshold = MyLogger.timer_set_threshold
 
 
 @time_this
@@ -276,6 +286,7 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, conn):
     return dof, dof_each_node, conn_dof
 
 
+@time_this
 def to_vtk(conn, X, nodal_sol={}, vtk_name="problem.vtk"):
     """
     Generate a vtk given conn, X, and optionally nodal_sol

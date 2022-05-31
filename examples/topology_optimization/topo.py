@@ -15,7 +15,8 @@ class TopoProblem(ParOpt.Problem):
         model: pyfem.LinearElasticity,
         filtr: pyfem.Helmholtz,
         fixed_volume,
-        save_history=False,
+        save_history=True,
+        save_history_every=10,
     ):
         ncon = 1
         super().__init__(MPI.COMM_SELF, model.nnodes, ncon)
@@ -24,6 +25,7 @@ class TopoProblem(ParOpt.Problem):
         self.filtr = filtr
         self.fixed_volume = fixed_volume
         self.save_history = save_history
+        self.save_history_every = save_history_every
 
         self.fig, self.ax = plt.subplots(constrained_layout=True)
         self.counter = 0
@@ -40,10 +42,10 @@ class TopoProblem(ParOpt.Problem):
         rho = self.filtr.apply(x)
 
         # Save the design
-        if self.save_history:
+        if self.save_history and self.counter % self.save_history_every == 0:
             self.plot(rho, self.ax)
             self.fig.savefig(f"design_{self.counter:d}.png")
-            self.counter += 1
+        self.counter += 1
 
         # Evaluate compliance
         obj, self.u = self.model.compliance(rho)
@@ -96,19 +98,17 @@ class TopoProblem(ParOpt.Problem):
 
 
 if __name__ == "__main__":
-    utils.timer_on()
+    utils.timer_set_threshold(10.0)  # Don't print t < 10 ms
 
     # Create linear elasticity model
-    creator = pyfem.ProblemCreator(
-        nnodes_x=16, nnodes_y=16, nnodes_z=16, element_type="block"
-    )
+    creator = pyfem.ProblemCreator(nnodes_x=128, nnodes_y=128, element_type="quad")
     conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
-    # quadrature = pyfem.QuadratureBilinear2D()
-    # basis = pyfem.BasisBilinear2D(quadrature)
+    quadrature = pyfem.QuadratureBilinear2D()
+    basis = pyfem.BasisBilinear2D(quadrature)
     # quadrature = pyfem.QuadratureTriangle2D()
     # basis = pyfem.BasisTriangle2D(quadrature)
-    quadrature = pyfem.QuadratureBlock3D()
-    basis = pyfem.BasisBlock3D(quadrature)
+    # quadrature = pyfem.QuadratureBlock3D()
+    # basis = pyfem.BasisBlock3D(quadrature)
 
     model = pyfem.LinearElasticity(
         X, conn, dof_fixed, None, nodal_force, quadrature, basis, p=5.0
@@ -120,9 +120,8 @@ if __name__ == "__main__":
 
     # Create paropt problem
     prob = TopoProblem(model, filtr, fixed_volume=0.4)
-    prob.checkGradients()
 
-    options = {"algorithm": "mma", "mma_max_iterations": 50}
+    options = {"algorithm": "mma", "mma_max_iterations": 100}
 
     # Set up the optimizer
     opt = ParOpt.Optimizer(prob, options)

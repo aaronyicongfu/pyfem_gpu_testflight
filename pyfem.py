@@ -1,7 +1,7 @@
 import numpy as np
 from scipy import sparse
 from scipy import special
-from scipy.sparse.linalg import spsolve, gmres
+from scipy.sparse.linalg import spsolve, gmres, cg
 from abc import ABC, abstractmethod
 import matplotlib.tri as tri
 import pyamg
@@ -151,6 +151,7 @@ class BasisBase(ABC):
         shape_derivs = []
         return shape_derivs
 
+    @time_this
     def eval_shape_fun(self):
         """
         Evaluate the shape function values at quadrature points
@@ -165,6 +166,7 @@ class BasisBase(ABC):
             )
         return self.N
 
+    @time_this
     def eval_shape_fun_deriv(self):
         """
         Evaluate the shape function derivatives at quadrature points
@@ -189,6 +191,7 @@ class BasisBilinear2D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
+    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [
             0.25 * (1.0 - qpt[0]) * (1.0 - qpt[1]),
@@ -198,6 +201,7 @@ class BasisBilinear2D(BasisBase):
         ]
         return shape_vals
 
+    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [
             # fmt: off
@@ -221,6 +225,7 @@ class BasisBlock3D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
+    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [
             0.125 * (1.0 - qpt[0]) * (1.0 - qpt[1]) * (1.0 - qpt[2]),
@@ -234,6 +239,7 @@ class BasisBlock3D(BasisBase):
         ]
         return shape_vals
 
+    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [
             # fmt: off
@@ -293,10 +299,12 @@ class BasisTriangle2D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
+    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [qpt[0], qpt[1], 1 - qpt[0] - qpt[1]]
         return shape_vals
 
+    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [1.0, 0.0, 0.0, 1.0, -1.0, -1.0]
         return shape_derivs
@@ -1123,13 +1131,11 @@ class LinearElasticity(ModelBase):
         )
 
         # Allocate material property at quadratures
-        self.Cq = np.zeros((self.nelems, self.nquads, n_stress_tensor, n_stress_tensor))
+        self.Cq = np.zeros((self.nelems, self.nquads))
         self.Cqderiv = np.zeros(
             (
                 self.nelems,
                 self.nquads,
-                n_stress_tensor,
-                n_stress_tensor,
                 self.nnodes_per_elem,
             )
         )
@@ -1138,6 +1144,7 @@ class LinearElasticity(ModelBase):
         self.rho_e = np.zeros((self.nelems, self.nnodes_per_elem))
         self.rho_q = np.zeros((self.nelems, self.nquads))
 
+        self.inner = np.zeros((self.nelems, self.nnodes_per_elem))
         self.Ke_deriv = np.zeros(
             (
                 self.nelems,
@@ -1220,7 +1227,12 @@ class LinearElasticity(ModelBase):
         K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
 
         # Solve the linear system
-        u = spsolve(K, rhs)
+        ml = pyamg.smoothed_aggregation_solver(K)
+        # u = ml.solve(rhs, tol=1e-8)
+        M = ml.aspreconditioner()
+        u, fail = cg(K, rhs, tol=1e-8, M=M)
+        if fail:
+            raise RuntimeError(f"CG failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -1239,6 +1251,7 @@ class LinearElasticity(ModelBase):
         grad = -self._compute_K_dv_sens(rho, u, u)
         return grad
 
+    @time_this
     def volume(self, rho):
         """
         Compute the normalized volume of the design
@@ -1249,6 +1262,7 @@ class LinearElasticity(ModelBase):
         vol = rho.sum() / self.nnodes
         return vol
 
+    @time_this
     def volume_grad(self, rho):
         """
         Compute the gradient of the normalized volume with respect to rho
@@ -1288,24 +1302,25 @@ class LinearElasticity(ModelBase):
 
         # Compute derivative of Ke w.r.t. rho
         self.Ke_deriv[...] = np.einsum(
-            "iq,q,iqnj,iqnmo,iqmk->ijko",
+            "iq,q,iqnj,iqo,nm,iqmk->ijko",
             self.detJq,
             wq,
             self.Be,
             self.Cqderiv,
+            self.C0,
             self.Be,
             optimize=True,
         )
 
         # Compute the derivative of the inner product for each element
-        inner = np.einsum(
+        self.inner[...] = np.einsum(
             "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
         )
 
         # Assemble the derivative
         dfdrho = np.zeros(self.nnodes)
         for i in range(self.nnodes_per_elem):
-            np.add.at(dfdrho, self.conn[:, i], inner[:, i])
+            np.add.at(dfdrho, self.conn[:, i], self.inner[:, i])
         return dfdrho
 
     @time_this
@@ -1330,8 +1345,7 @@ class LinearElasticity(ModelBase):
         utils.compute_elem_interp(N, self.rho_e, self.rho_q)
 
         # Compute penalized density at each quadrature point
-        ramp_rho_q = self.rho_q / (1 + self.p * (1 - self.rho_q))
-        self.Cq[...] = np.einsum("iq, jk -> iqjk", ramp_rho_q, self.C0)
+        self.Cq[:] = self.rho_q / (1 + self.p * (1 - self.rho_q))
         return
 
     @time_this
@@ -1359,7 +1373,7 @@ class LinearElasticity(ModelBase):
         ramp_rho_q_deriv = (1 + self.p) / (1 + self.p * (1 - self.rho_q)) ** 2
 
         N = self.basis.eval_shape_fun()
-        self.Cqderiv[...] = np.einsum("ql,iq,jk -> iqjkl", N, ramp_rho_q_deriv, self.C0)
+        self.Cqderiv[...] = np.einsum("ql,iq -> iql", N, ramp_rho_q_deriv)
         return
 
     @time_this
@@ -1441,11 +1455,12 @@ class LinearElasticity(ModelBase):
         wq = self.quadrature.get_weight()
 
         Ke[...] = np.einsum(
-            "iq,q,iqnj,iqnm,iqmk->ijk",
+            "iq,q,iqnj,iq,nm,iqmk->ijk",
             self.detJq,
             wq,
             self.Be,
             self.Cq,
+            self.C0,
             self.Be,
             optimize=True,
         )
@@ -1479,7 +1494,8 @@ class Helmholtz(ModelBase):
         self.R = self._assemble_jacobian(self.Re)
         self.RT = self.R.transpose()
         self.K = self._assemble_jacobian(self.Ke_mat)
-        self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
+        # self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
+        self.Ksolve = pyamg.ruge_stuben_solver(self.K)
         return
 
     @time_this
@@ -1487,7 +1503,7 @@ class Helmholtz(ModelBase):
         """
         Apply the Helmholtz filter to x -> rho
         """
-        rho = self.Ksolve(self.compute_rhs(x))
+        rho = self.Ksolve.solve(self.compute_rhs(x), tol=1e-8)
         return rho
 
     @time_this
@@ -1495,7 +1511,7 @@ class Helmholtz(ModelBase):
         """
         Apply the Helmholtz filter to the gradient ∇_rho -> ∇x
         """
-        gradx = self.RT.dot(self.Ksolve(gradrho))
+        gradx = self.RT.dot(self.Ksolve.solve(gradrho, tol=1e-8))
         return gradx
 
     @time_this
