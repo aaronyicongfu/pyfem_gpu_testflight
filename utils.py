@@ -7,6 +7,7 @@ import numpy as np
 
 class MyLogger:
     counter = 0  # a static variable
+    timer_is_on = True
     print_to_stdout = False
     buffer = []
     istart = []  # stack of indices of open parantheses
@@ -14,21 +15,35 @@ class MyLogger:
     t_min = 1  # unit: ms
 
     @staticmethod
+    def timer_set_threshold(t: float):
+        """
+        Don't show entries with elapse time smaller than this. Unit: ms
+        """
+        MyLogger.t_min = t
+        return
+
+    @staticmethod
+    def timer_to_stdout():
+        """
+        print the profiler output to stdout, otherwise save it as a file
+        """
+        MyLogger.print_to_stdout = True
+        return
+
+    @staticmethod
     def timer_on():
         """
         Call this function before execution to switch on the profiler
-        and print execution time for functions to stdout
         """
-        MyLogger.print_to_stdout = True
+        MyLogger.timer_is_on = True
         return
 
     @staticmethod
     def timer_off():
         """
         Call this function before execution to switch off the profiler
-        and print execution time for functions to stdout
         """
-        MyLogger.print_to_stdout = False
+        MyLogger.timer_is_on = False
         return
 
     @staticmethod
@@ -38,6 +53,14 @@ class MyLogger:
         """
         tab = "    "
         fun_name = func.__qualname__
+
+        if not MyLogger.timer_is_on:
+
+            def wrapper(*args, **kwargs):
+                ret = func(*args, **kwargs)
+                return ret
+
+            return wrapper
 
         def wrapper(*args, **kwargs):
             info_str = f"{tab*MyLogger.counter}{fun_name}() called"
@@ -53,7 +76,7 @@ class MyLogger:
 
             info_str = f"{tab*MyLogger.counter}{fun_name}() return"
             entry = {
-                "msg": f"[timer] {info_str:<80s}({t_elapse:.2f} ms)",
+                "msg": f"[timer] {info_str:<80s} ({t_elapse:.2f} ms)",
                 "type": ")",
                 "t": t_elapse,
             }
@@ -80,12 +103,21 @@ class MyLogger:
 
                 # Now, we only keep the entries for expensive function calls
                 idx = list(MyLogger.pairs.keys()) + list(MyLogger.pairs.values())
-                keep_buffer = [MyLogger.buffer[i] for i in sorted(idx)]
-                MyLogger.buffer = []
+                if idx:
+                    idx.sort()
+                keep_buffer = [MyLogger.buffer[i] for i in idx]
 
                 if MyLogger.print_to_stdout:
                     for txt in keep_buffer:
                         print(txt["msg"])
+                else:
+                    with open("profiler.log", "a") as f:
+                        for txt in keep_buffer:
+                            f.write(txt["msg"] + "\n")
+
+                # Reset buffer and pairs
+                MyLogger.buffer = []
+                MyLogger.pairs = {}
             return ret
 
         return wrapper
@@ -94,6 +126,7 @@ class MyLogger:
 time_this = MyLogger.time_this
 timer_on = MyLogger.timer_on
 timer_off = MyLogger.timer_off
+timer_to_stdout = MyLogger.timer_to_stdout
 
 
 @time_this
