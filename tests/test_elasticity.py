@@ -65,7 +65,10 @@ class ElasticityDerivative(unittest.TestCase):
         )
         return
 
-    def run_case(self, creator, quadrature, basis):
+    def run_dKdx(self, creator, quadrature, basis):
+        """
+        Test the derivative of phi^T K psi w.r.t. nodal variable x
+        """
         (
             conn,
             X,
@@ -100,22 +103,51 @@ class ElasticityDerivative(unittest.TestCase):
         self.assertAlmostEqual((dfdrho - dfdrho_cs) / dfdrho, 0.0, delta=1e-12)
         return
 
+    def run_compliance_gradient(self, creator, quadrature, basis):
+        (
+            conn,
+            X,
+            dof_fixed,
+            nodal_force,
+        ) = creator.create_linear_elasticity_problem()
+        model = pyfem.LinearElasticity(
+            X, conn, dof_fixed, None, nodal_force, quadrature, basis, p=5.0
+        )
+
+        np.random.seed(0)
+        nnodes = X.shape[0]
+        rho = np.random.rand(nnodes)
+        p = np.random.rand(nnodes)
+        h = 1e-30
+
+        c, u = model.compliance(rho)
+        grad = model.compliance_grad(rho, u)
+
+        c_cs, _ = model.compliance(rho + 1j * p * h)
+        c_cs = c_cs.imag / h
+        print(f"grad:    {p.dot(grad):.15e}")
+        print(f"grad_cs: {c_cs:.15e}")
+        return
+
     def test_2d_quad(self):
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        self.run_case(self.creator_2d_quad, quadrature, basis)
+        self.run_dKdx(self.creator_2d_quad, quadrature, basis)
+        self.run_compliance_gradient(self.creator_2d_quad, quadrature, basis)
         return
 
     def test_2d_tri(self):
         quadrature = pyfem.QuadratureTriangle2D()
         basis = pyfem.BasisTriangle2D(quadrature)
-        self.run_case(self.creator_2d_tri, quadrature, basis)
+        self.run_dKdx(self.creator_2d_tri, quadrature, basis)
+        self.run_compliance_gradient(self.creator_2d_tri, quadrature, basis)
         return
 
     def test_3d_block(self):
         quadrature = pyfem.QuadratureBlock3D()
         basis = pyfem.BasisBlock3D(quadrature)
-        self.run_case(self.creator_3d_block, quadrature, basis)
+        self.run_dKdx(self.creator_3d_block, quadrature, basis)
+        self.run_compliance_gradient(self.creator_3d_block, quadrature, basis)
         return
 
 

@@ -1205,13 +1205,24 @@ class LinearElasticity(ModelBase):
         """
         Compute the compliance function given nodal density
         """
-        return
+        # Construct the linear system
+        K = self.compute_jacobian(rho)
+        rhs = self.compute_rhs()
 
-    def compliance_grad(self, rho):
+        # Apply Dirichlet boundary conditions
+        K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+        # Solve the linear system
+        u = spsolve(K, rhs)
+
+        c = rhs.dot(u)
+        return c, u
+
+    def compliance_grad(self, rho, u):
         """
         Compute the compliance function gradient w.r.t. nodal density
         """
-        return
+        return -self._compute_K_dv_sens(rho, u, u)
 
     def _compute_K_dv_sens(self, rho, phi, psi):
         """
