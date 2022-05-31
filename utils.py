@@ -8,6 +8,10 @@ import numpy as np
 class MyLogger:
     counter = 0  # a static variable
     print_to_stdout = False
+    buffer = []
+    istart = []  # stack of indices of open parantheses
+    pairs = {}
+    t_min = 1  # unit: ms
 
     @staticmethod
     def timer_on():
@@ -18,6 +22,7 @@ class MyLogger:
         MyLogger.print_to_stdout = True
         return
 
+    @staticmethod
     def timer_off():
         """
         Call this function before execution to switch off the profiler
@@ -36,20 +41,51 @@ class MyLogger:
 
         def wrapper(*args, **kwargs):
             info_str = f"{tab*MyLogger.counter}{fun_name}() called"
-            if MyLogger.print_to_stdout:
-                print(f"[timer] {info_str:<40s}")
+            entry = {"msg": f"[timer] {info_str:<40s}", "type": "("}
+            MyLogger.buffer.append(entry)
+
             MyLogger.counter += 1
             t0 = perf_counter_ns()
             ret = func(*args, **kwargs)
             t1 = perf_counter_ns()
             t_elapse = (t1 - t0) / 1e6  # unit: ms
             MyLogger.counter -= 1
+
             info_str = f"{tab*MyLogger.counter}{fun_name}() return"
-            if MyLogger.print_to_stdout:
-                print(
-                    f"[timer] {info_str:<80s}",
-                    f"({t_elapse:.2f} ms)",
-                )
+            entry = {
+                "msg": f"[timer] {info_str:<80s}({t_elapse:.2f} ms)",
+                "type": ")",
+                "t": t_elapse,
+            }
+            MyLogger.buffer.append(entry)
+
+            # Once the most outer function returns, we filter the buffer such
+            # that we only keep entry pairs whose elapse time is above threshold
+            if MyLogger.counter == 0:
+                for idx, entry in enumerate(MyLogger.buffer):
+                    if entry["type"] == "(":
+                        MyLogger.istart.append(idx)
+                    if entry["type"] == ")":
+                        try:
+                            start_idx = MyLogger.istart.pop()
+                            if entry["t"] > MyLogger.t_min:
+                                MyLogger.pairs[start_idx] = idx
+                        except IndexError:
+                            print("[Warning]Too many return message")
+
+                # Now our stack should be empty, otherwise we have unpaired
+                # called/return message
+                if MyLogger.istart:
+                    print("[Warning]Too many called message")
+
+                # Now, we only keep the entries for expensive function calls
+                idx = list(MyLogger.pairs.keys()) + list(MyLogger.pairs.values())
+                keep_buffer = [MyLogger.buffer[i] for i in sorted(idx)]
+                MyLogger.buffer = []
+
+                if MyLogger.print_to_stdout:
+                    for txt in keep_buffer:
+                        print(txt["msg"])
             return ret
 
         return wrapper
