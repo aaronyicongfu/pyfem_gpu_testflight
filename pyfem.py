@@ -1200,9 +1200,17 @@ class LinearElasticity(ModelBase):
         K = self._assemble_jacobian(self.Ke_mat)
         return K
 
+    @time_this
     def compliance(self, rho):
         """
         Compute the compliance function given nodal density
+
+        Inputs:
+            rho: nodal (usually filtered) density
+
+        Return:
+            c: compliance scalar
+            u: solution vector
         """
         # Construct the linear system
         K = self.compute_jacobian(rho)
@@ -1217,12 +1225,41 @@ class LinearElasticity(ModelBase):
         c = rhs.dot(u)
         return c, u
 
+    @time_this
     def compliance_grad(self, rho, u):
         """
         Compute the compliance function gradient w.r.t. nodal density
-        """
-        return -self._compute_K_dv_sens(rho, u, u)
+        Inputs:
+            rho: nodal (usually filtered) density
+            u: solution vector
 
+        Return:
+            grad: gradient with respect to rho
+        """
+        grad = -self._compute_K_dv_sens(rho, u, u)
+        return grad
+
+    def volume(self, rho):
+        """
+        Compute the normalized volume of the design
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        vol = rho.sum() / self.nnodes
+        return vol
+
+    def volume_grad(self, rho):
+        """
+        Compute the gradient of the normalized volume with respect to rho
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        grad = np.ones(self.nnodes) / self.nnodes
+        return grad
+
+    @time_this
     def _compute_K_dv_sens(self, rho, phi, psi):
         """
         Compute the sensitivity of scalar value (phi^T K psi) w.r.t. nodal
@@ -1860,9 +1897,12 @@ class ProblemCreator:
         # Set nodal force
         nodal_force = {}
         for k in range(self.nnodes_z):
-            for j in range(self.nnodes_y):
-                nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
-            # nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
+            # for j in range(self.nnodes_y):
+            #     if j < self.nnodes_y / 10:
+            #         nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][
+            #             0 : self.ndims
+            #         ]
+            nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
 
         return self.conn, self.X, dof_fixed, nodal_force
 
