@@ -1,3 +1,4 @@
+from time import time
 import numpy as np
 from scipy import sparse
 from scipy import special
@@ -1095,7 +1096,12 @@ class LinearElasticity(ModelBase):
         basis: BasisBase,
         E=10.0,
         nu=0.3,
+        p=0.0,
     ):
+        """
+        Inputs:
+            p: RAMP penalization
+        """
         # Infer the problem dimensions
         ndof_per_node = X.shape[1]
 
@@ -1104,22 +1110,9 @@ class LinearElasticity(ModelBase):
             ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
 
-        # Plane stress-specific variables
         self.nodal_force = nodal_force
 
-        if ndof_per_node == 2:
-            self.C = E * np.array(
-                [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
-            )
-            self.C *= 1.0 / (1.0 - nu**2)
-        else:
-            self.C = np.zeros((6, 6))
-            self.C[0, 0] = self.C[1, 1] = self.C[2, 2] = 1 - nu
-            self.C[0, 1] = self.C[0, 2] = self.C[1, 0] = nu
-            self.C[1, 2] = self.C[2, 0] = self.C[2, 1] = nu
-            self.C[3, 3] = self.C[4, 4] = self.C[5, 5] = 0.5 - nu
-            self.C *= E / ((1 + nu) * (1 - 2 * nu))
-
+        # Allocate B matrix
         n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
         self.Be = np.zeros(
             (
@@ -1129,6 +1122,46 @@ class LinearElasticity(ModelBase):
                 self.nnodes_per_elem * ndof_per_node,
             )
         )
+
+        # Allocate material property at quadratures
+        self.Cq = np.zeros((self.nelems, self.nquads, n_stress_tensor, n_stress_tensor))
+        self.Cqderiv = np.zeros(
+            (
+                self.nelems,
+                self.nquads,
+                n_stress_tensor,
+                n_stress_tensor,
+                self.nnodes_per_elem,
+            )
+        )
+
+        # Allocate rho at element and quadrature
+        self.rho_e = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.rho_q = np.zeros((self.nelems, self.nquads))
+
+        self.Ke_deriv = np.zeros(
+            (
+                self.nelems,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem,
+            )
+        )
+        self.p = p
+
+        # Compute constitutive matrix
+        if ndof_per_node == 2:
+            self.C0 = E * np.array(
+                [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
+            )
+            self.C0 *= 1.0 / (1.0 - nu**2)
+        else:
+            self.C0 = np.zeros((6, 6))
+            self.C0[0, 0] = self.C0[1, 1] = self.C0[2, 2] = 1 - nu
+            self.C0[0, 1] = self.C0[0, 2] = self.C0[1, 0] = nu
+            self.C0[1, 2] = self.C0[2, 0] = self.C0[2, 1] = nu
+            self.C0[3, 3] = self.C0[4, 4] = self.C0[5, 5] = 0.5 - nu
+            self.C0 *= E / ((1 + nu) * (1 - 2 * nu))
         return
 
     @time_this
@@ -1142,7 +1175,7 @@ class LinearElasticity(ModelBase):
         return self.rhs
 
     @time_this
-    def compute_jacobian(self):
+    def compute_jacobian(self, rho=1.0):
         """
         Compute the element Jacobian (stiffness) matrices Ke and assemble the
         global K
@@ -1150,12 +1183,137 @@ class LinearElasticity(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
+        # Set nodal density
+        if not hasattr(rho, "__len__"):
+            rho = np.ones(self.nnodes) * rho
+
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.Ke_mat = self.Ke_mat.astype(complex)
+
+        # Update self.Cq
+        self._update_material_property(rho)
+
         # Compute element Jacobian matrix -> Ke
         self._compute_element_jacobian(self.Ke_mat)
 
         # Assemble global Jacobian -> K
         K = self._assemble_jacobian(self.Ke_mat)
         return K
+
+    def compliance(self, rho):
+        """
+        Compute the compliance function given nodal density
+        """
+        return
+
+    def compliance_grad(self, rho):
+        """
+        Compute the compliance function gradient w.r.t. nodal density
+        """
+        return
+
+    def _compute_K_dv_sens(self, rho, phi, psi):
+        """
+        Compute the sensitivity of scalar value (phi^T K psi) w.r.t. nodal
+        density rho
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute Be matrix -> Be
+        self._compute_element_Bmat(self.Ngrad, self.Be)
+
+        # Get quadrature weights
+        wq = self.quadrature.get_weight()
+
+        # Compute material property w.r.t. rho -> self.Cqderiv
+        self._update_material_property_deriv(rho)
+
+        # Compute derivative of Ke w.r.t. rho
+        self.Ke_deriv[...] = np.einsum(
+            "iq,q,iqnj,iqnmo,iqmk->ijko",
+            self.detJq,
+            wq,
+            self.Be,
+            self.Cqderiv,
+            self.Be,
+            optimize=True,
+        )
+
+        # Compute the derivative of the inner product for each element
+        inner = np.einsum(
+            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        )
+
+        # Assemble the derivative
+        dfdrho = np.zeros(self.nnodes)
+        for i in range(self.nnodes_per_elem):
+            np.add.at(dfdrho, self.conn[:, i], inner[:, i])
+        return dfdrho
+
+    @time_this
+    def _update_material_property(self, rho):
+        """
+        Update material property on quadrature points given nodal density. RAMP
+        penalization is used, hence the material C is multiplied by a factor of
+        rho / (1 + p * (1 - rho))
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.Cq = self.Cq.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density at each quadrature point
+        ramp_rho_q = self.rho_q / (1 + self.p * (1 - self.rho_q))
+        self.Cq[...] = np.einsum("iq, jk -> iqjk", ramp_rho_q, self.C0)
+        return
+
+    @time_this
+    def _update_material_property_deriv(self, rho):
+        """
+        Update material property on quadrature points w.r.t. nodal density. RAMP
+        penalization is used, hence the material C0 is multiplied by a factor of
+        (1 + p) / (1 + p * (1 - rho))**2
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.Cqderiv = self.Cqderiv.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density derivative at each quadrature point
+        ramp_rho_q_deriv = (1 + self.p) / (1 + self.p * (1 - self.rho_q)) ** 2
+
+        N = self.basis.eval_shape_fun()
+        self.Cqderiv[...] = np.einsum("ql,iq,jk -> iqjkl", N, ramp_rho_q_deriv, self.C0)
+        return
 
     @time_this
     def _compute_element_Bmat(self, Ngrad, Be):
@@ -1235,21 +1393,12 @@ class LinearElasticity(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        # path, info = np.einsum_path(
-        #     "iq,q,iqnj,nm,iqmk->ijk",
-        #     self.detJq,
-        #     wq,
-        #     self.Be,
-        #     self.C,
-        #     self.Be,
-        #     optimize="optimal",
-        # )
         Ke[...] = np.einsum(
-            "iq,q,iqnj,nm,iqmk->ijk",
+            "iq,q,iqnj,iqnm,iqmk->ijk",
             self.detJq,
             wq,
             self.Be,
-            self.C,
+            self.Cq,
             self.Be,
             optimize=True,
         )
