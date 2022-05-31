@@ -114,3 +114,6 @@ class NodeFilter:
     def apply(self, x):
         rho = self.A(self.B.dot(x))
         return rho
+
+    def applyGradient(self, grad):
+        return self.BT.dot(self.A(grad))

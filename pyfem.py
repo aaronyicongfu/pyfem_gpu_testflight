@@ -1,4 +1,3 @@
-from time import time
 import numpy as np
 from scipy import sparse
 from scipy import special
@@ -1441,7 +1440,9 @@ class Helmholtz(ModelBase):
         self.Re = np.zeros((self.nelems, self.nnodes_per_elem, self.nnodes_per_elem))
         self._compute_element_jacobian_and_rhs(self.Ke_mat, self.Re)
         self.R = self._assemble_jacobian(self.Re)
+        self.RT = self.R.transpose()
         self.K = self._assemble_jacobian(self.Ke_mat)
+        self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
         return
 
     @time_this
@@ -1449,7 +1450,16 @@ class Helmholtz(ModelBase):
         """
         Apply the Helmholtz filter to x -> rho
         """
-        return spsolve(self.K, self.compute_rhs(x))
+        rho = self.Ksolve(self.compute_rhs(x))
+        return rho
+
+    @time_this
+    def apply_gradient(self, gradrho):
+        """
+        Apply the Helmholtz filter to the gradient ∇_rho -> ∇x
+        """
+        gradx = self.RT.dot(self.Ksolve(gradrho))
+        return gradx
 
     @time_this
     def compute_rhs(self, x):
