@@ -1,25 +1,33 @@
 import numpy as np
 import unittest
 import sys
-from ref_linear_poisson import Poisson, gfunc
+from ref_linear_poisson import Poisson
+from ref_linear_poisson import gfunc as gfunc_ref
 
 sys.path.append("..")
 import pyfem
 
 
 class LinearPoissonCase(unittest.TestCase):
+    def gfunc(self, x):
+        _x = x[..., 0]
+        _y = x[..., 1]
+        return _x * (_x - 5.0) * (_x - 10.0) * _y * (_y - 4.0)
+
     def test_linear_poisson(self):
         # Compute u
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
         conn, X, dof_fixed = creator.create_poisson_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.LinearPoisson2D(X, conn, dof_fixed, None, quadrature, basis)
+        model = pyfem.LinearPoisson(
+            X, conn, dof_fixed, None, quadrature, basis, self.gfunc
+        )
         assembler = pyfem.Assembler(model)
         u = assembler.solve(method="direct")
 
         # Compute u_ref
-        poisson = Poisson(conn, X, dof_fixed, gfunc)
+        poisson = Poisson(conn, X, dof_fixed, gfunc_ref)
         u_ref = poisson.solve()
 
         # Compare

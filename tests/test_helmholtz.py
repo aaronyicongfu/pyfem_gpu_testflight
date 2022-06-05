@@ -1,7 +1,6 @@
 import unittest
 import sys
 from ref_helmholtz import NodeFilter
-from scipy.sparse.linalg import spsolve
 import numpy as np
 
 sys.path.append("..")
@@ -41,8 +40,8 @@ class Helmholtz2D(unittest.TestCase):
         print(f"pTu_ref:{pTu_ref}")
         print(f"pTg    :{pTg}")
         print(f"pTg_ref:{pTg_ref}")
-        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-10)
-        self.assertAlmostEqual((pTg - pTg_ref) / pTu, 0, delta=1e-10)
+        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-8)
+        self.assertAlmostEqual((pTg - pTg_ref) / pTu, 0, delta=1e-8)
 
         return
 

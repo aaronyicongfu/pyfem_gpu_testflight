@@ -1,3 +1,4 @@
+from ast import Call
 import numpy as np
 from scipy import sparse
 from scipy import special
@@ -7,6 +8,7 @@ import matplotlib.tri as tri
 import pyamg
 import utils
 from utils import time_this
+from typing import Callable
 
 
 class QuadratureBase(ABC):
@@ -607,9 +609,9 @@ class ModelBase(ABC):
         return K.tocsr()
 
 
-class LinearPoisson2D(ModelBase):
+class LinearPoisson(ModelBase):
     """
-    The 2-dimensional Poisson equation
+    The 2- or 3-dimensional Poisson equation
 
     Equation:
     -∆u = g in Ω
@@ -630,11 +632,21 @@ class LinearPoisson2D(ModelBase):
         dof_fixed_vals,
         quadrature: QuadratureBase,
         basis: BasisBase,
+        gfunc: Callable,
     ):
+        """
+        Inputs:
+            gfunc: source term, takes takes in x and return vals, where
+                   x[..., 0] = xvals
+                   x[..., 1] = yvals
+                   x[..., 2] = zvals if is 3D problem
+                   vals.shape == x[..., 0].shape
+        """
         ndof_per_node = 1
         super().__init__(
             ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
+        self.gfunc = gfunc
         self.fun_vals = None
         return
 
@@ -665,9 +677,7 @@ class LinearPoisson2D(ModelBase):
 
     @time_this
     def _compute_gfun(self, Xq, fun_vals):
-        xvals = Xq[..., 0]
-        yvals = Xq[..., 1]
-        fun_vals[...] = xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
+        fun_vals[...] = self.gfunc(Xq)
         return
 
     @time_this
@@ -698,7 +708,7 @@ class LinearPoisson2D(ModelBase):
         if self.fun_vals is None:
             self.fun_vals = np.zeros(self.Xq.shape[0:-1])
 
-        # Evaluate function g
+        # Evaluate function g at each quadrature point q
         self._compute_gfun(self.Xq, self.fun_vals)
 
         # Get quadrature weights
@@ -713,7 +723,7 @@ class LinearPoisson2D(ModelBase):
         """
         Evaluate element-wise Jacobian matrices
 
-            Ke = ∑ detJq wq ( NxNxT + NyNyT)_q
+            Ke = ∑ detJq wq ( NxNxT + NyNyT + ...)_q
                  q
 
         Outputs:
