@@ -714,14 +714,14 @@ class LinearPoisson(ModelBase):
 
         Inputs:
             rho: nodal (usually filtered) density
-            solver: cg or direct, note that for a complex step, direct must be
-                    used
+            solver: direct, cg or gmres, note that for a complex step, direct
+                    must be used
 
         Return:
             c: compliance scalar
             u: solution vector
         """
-        assert solver == "cg" or solver == "direct"
+        assert solver == "direct" or solver == "cg" or solver == "gmres"
 
         # Construct the linear system
         K = self.compute_jacobian(rho)
@@ -736,9 +736,12 @@ class LinearPoisson(ModelBase):
         else:
             ml = pyamg.smoothed_aggregation_solver(K)
             M = ml.aspreconditioner()
-            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if solver == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"CG failed with code {fail}")
+                raise RuntimeError(f"{solver} failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -1459,14 +1462,14 @@ class LinearElasticity(ModelBase):
 
         Inputs:
             rho: nodal (usually filtered) density
-            solver: cg or direct, note that for a complex step, direct must be
-                    used
+            solver: direct, cg or gmres, note that for a complex step, direct
+                    must be used
 
         Return:
             c: compliance scalar
             u: solution vector
         """
-        assert solver == "cg" or solver == "direct"
+        assert solver == "direct" or solver == "cg" or solver == "gmres"
 
         # Construct the linear system
         K = self.compute_jacobian(rho)
@@ -1481,9 +1484,12 @@ class LinearElasticity(ModelBase):
         else:
             ml = pyamg.smoothed_aggregation_solver(K)
             M = ml.aspreconditioner()
-            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if solver == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"CG failed with code {fail}")
+                raise RuntimeError(f"{solver} failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -1750,7 +1756,6 @@ class Helmholtz(ModelBase):
         self.R = self._assemble_jacobian(self.Re)
         self.RT = self.R.transpose()
         self.K = self._assemble_jacobian(self.Ke_mat)
-        # self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
         self.Ksolve = pyamg.ruge_stuben_solver(self.K)
         return
 
@@ -1942,7 +1947,12 @@ class Assembler:
     def solve(self, method="gmres"):
         """
         Perform the static analysis
+
+        Inputs:
+            method: direct, cg or gmres
         """
+        assert method == "direct" or method == "cg" or method == "gmres"
+
         # Construct the linear system
         K = self.model.compute_jacobian()
         rhs = self.model.compute_rhs()
@@ -1960,7 +1970,12 @@ class Assembler:
     ):
         """
         Perform the static analysis
+
+        Inputs:
+            method: direct, cg or gmres
         """
+        assert method == "direct" or method == "cg" or method == "gmres"
+
         # Set the initial guess as u = 0
         if u0 is None:
             u = np.zeros(self.model.nnodes)
@@ -2028,7 +2043,7 @@ class Assembler:
         Solve the linear system
 
         Args:
-            method: direct or gmres
+            method: direct, cg or gmres
 
         Return:
             u: solution
@@ -2038,9 +2053,12 @@ class Assembler:
         else:
             ml = pyamg.smoothed_aggregation_solver(K)
             M = ml.aspreconditioner()
-            u, fail = gmres(K, rhs, M=M)
+            if method == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"GMRES failed with code {fail}")
+                raise RuntimeError(f"{method} failed with code {fail}")
         return u
 
 
