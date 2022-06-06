@@ -785,6 +785,13 @@ class LinearPoisson(ModelBase):
         return
 
     @time_this
+    def _einsum_element_rhs(self, detJq, wq, N, fun_vals, rhs_e):
+        rhs_e[...] = np.einsum(
+            "ik,k,jk,ik -> ij", detJq, wq, N, fun_vals, optimize=True
+        )
+        return
+
+    @time_this
     def _compute_element_rhs(self, rhs_e):
         """
         Evaluate element-wise rhs vectors:
@@ -819,7 +826,20 @@ class LinearPoisson(ModelBase):
         wq = self.quadrature.get_weight()
 
         # Compute element rhs
-        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.fun_vals)
+        self._einsum_element_rhs(self.detJq, wq, N, self.fun_vals, rhs_e)
+        return
+
+    @time_this
+    def _einsum_element_jacobian(self, kappa_q, detJq, wq, Ngrad, Ke):
+        Ke[...] = np.einsum(
+            "iq,iq,q,iqjl,iqkl -> ijk",
+            kappa_q,
+            detJq,
+            wq,
+            Ngrad,
+            Ngrad,
+            optimize=True,
+        )
         return
 
     @time_this
@@ -849,14 +869,27 @@ class LinearPoisson(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        Ke[...] = np.einsum(
-            "iq,iq,q,iqjl,iqkl -> ijk",
-            self.kappa_q,
-            self.detJq,
+        self._einsum_element_jacobian(self.kappa_q, self.detJq, wq, self.Ngrad, Ke)
+
+        return
+
+    @time_this
+    def _einsum_element_sens(self, kappa_q_deriv, detJq, wq, Ngrad, Ke_deriv):
+        Ke_deriv[...] = np.einsum(
+            "iqo,iq,q,iqjl,iqkl -> ijko",
+            kappa_q_deriv,
+            detJq,
             wq,
-            self.Ngrad,
-            self.Ngrad,
+            Ngrad,
+            Ngrad,
             optimize=True,
+        )
+        return
+
+    @time_this
+    def _einsum_element_sens_inner(self, conn_dof, phi, psi, Ke_deriv, inner):
+        inner[...] = np.einsum(
+            "ij,ik,ijko -> io", phi[conn_dof], psi[conn_dof], Ke_deriv
         )
         return
 
@@ -884,19 +917,13 @@ class LinearPoisson(ModelBase):
         # Compute material property w.r.t. rho -> self.kappa_q_deriv
         self._update_material_property_deriv(rho)
 
-        self.Ke_deriv[...] = np.einsum(
-            "iqo,iq,q,iqjl,iqkl -> ijko",
-            self.kappa_q_deriv,
-            self.detJq,
-            wq,
-            self.Ngrad,
-            self.Ngrad,
-            optimize=True,
+        self._einsum_element_sens(
+            self.kappa_q_deriv, self.detJq, wq, self.Ngrad, self.Ke_deriv
         )
 
         # Compute the derivative of the inner product for each element
-        self.inner[...] = np.einsum(
-            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        self._einsum_element_sens_inner(
+            self.conn_dof, phi, psi, self.Ke_deriv, self.inner
         )
 
         # Assemble the derivative
@@ -1641,6 +1668,20 @@ class LinearElasticity(ModelBase):
         return
 
     @time_this
+    def _einsum_element_jacobian(self, detJq, wq, Be, Cq, C0, Ke):
+        Ke[...] = np.einsum(
+            "iq,q,iqnj,iq,nm,iqmk->ijk",
+            detJq,
+            wq,
+            Be,
+            Cq,
+            C0,
+            Be,
+            optimize=True,
+        )
+        return
+
+    @time_this
     def _compute_element_jacobian(self, Ke):
         """
         Evaluate element-wise stiffness matrix Ke
@@ -1678,16 +1719,7 @@ class LinearElasticity(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        Ke[...] = np.einsum(
-            "iq,q,iqnj,iq,nm,iqmk->ijk",
-            self.detJq,
-            wq,
-            self.Be,
-            self.Cq,
-            self.C0,
-            self.Be,
-            optimize=True,
-        )
+        self._einsum_element_jacobian(self.detJq, wq, self.Be, self.Cq, self.C0, Ke)
         return
 
 
@@ -1748,6 +1780,18 @@ class Helmholtz(ModelBase):
         return self.K
 
     @time_this
+    def _einsum_element_jacobian(self, detJq, r0, wq, Ngrad, Ke):
+        Ke[...] = np.einsum(
+            "iq,q,iqjl,iqkl -> ijk", detJq * r0**2, wq, Ngrad, Ngrad, optimize=True
+        )
+        return
+
+    @time_this
+    def _einsum_element_rhs(self, detJq, wq, N, Re):
+        Re[...] = np.einsum("iq,q,qj,qk -> ijk", detJq, wq, N, N, optimize=True)
+        return
+
+    @time_this
     def _compute_element_jacobian_and_rhs(self, Ke, Re):
         """
         Evaluate element-wise Jacobian matrices and rhs, where
@@ -1783,18 +1827,9 @@ class Helmholtz(ModelBase):
         # Get shape functions
         N = self.basis.eval_shape_fun()
 
-        Re[...] = np.einsum("iq,q,qj,qk -> ijk", self.detJq, wq, N, N)
-
-        Ke[...] = np.einsum(
-            "iq,q,iqjl,iqkl -> ijk",
-            self.detJq * self.r0**2,
-            wq,
-            self.Ngrad,
-            self.Ngrad,
-        )
-
+        self._einsum_element_rhs(self.detJq, wq, N, Re)
+        self._einsum_element_jacobian(self.detJq, self.r0, wq, self.Ngrad, Ke)
         Ke[...] += Re[...]
-
         return
 
 
