@@ -82,6 +82,7 @@ class MyProfiler:
             entry = {
                 "msg": f"[timer] {info_str:<80s} ({t_elapse:.2f} ms)",
                 "type": ")",
+                "fun_name": fun_name,
                 "t": t_elapse,
             }
             MyProfiler.buffer.append(entry)
@@ -112,8 +113,8 @@ class MyProfiler:
                 keep_buffer = [MyProfiler.buffer[i] for i in idx]
 
                 if MyProfiler.print_to_stdout:
-                    for txt in keep_buffer:
-                        print(txt["msg"])
+                    for entry in keep_buffer:
+                        print(entry["msg"])
                 else:
                     if (
                         os.path.exists(MyProfiler.log_name)
@@ -122,10 +123,18 @@ class MyProfiler:
                         os.remove(MyProfiler.log_name)
                         MyProfiler.old_log_removed = True
                     with open(MyProfiler.log_name, "a") as f:
-                        for txt in keep_buffer:
-                            f.write(txt["msg"] + "\n")
+                        for entry in keep_buffer:
+                            f.write(entry["msg"] + "\n")
 
                 # Save time information to dictionary
+                for entry in keep_buffer:
+                    if "t" in entry.keys():
+                        _fun_name = entry["fun_name"]
+                        _t = entry["t"]
+                        if _fun_name in MyProfiler.saved_times.keys():
+                            MyProfiler.saved_times[_fun_name].append(_t)
+                        else:
+                            MyProfiler.saved_times[_fun_name] = [_t]
 
                 # Reset buffer and pairs
                 MyProfiler.buffer = []
