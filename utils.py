@@ -3,19 +3,51 @@ Utility functions for profiling, data scattering, coordinate transformation, etc
 """
 from time import perf_counter_ns
 import numpy as np
+import os
 
 
-class MyLogger:
+class MyProfiler:
     counter = 0  # a static variable
+    timer_is_on = True
     print_to_stdout = False
+    buffer = []
+    istart = []  # stack of indices of open parantheses
+    pairs = {}
+    t_min = 1  # unit: ms
+    log_name = "profiler.log"
+    old_log_removed = False
+    saved_times = {}
+
+    @staticmethod
+    def timer_set_threshold(t: float):
+        """
+        Don't show entries with elapse time smaller than this. Unit: ms
+        """
+        MyProfiler.t_min = t
+        return
+
+    @staticmethod
+    def timer_to_stdout():
+        """
+        print the profiler output to stdout, otherwise save it as a file
+        """
+        MyProfiler.print_to_stdout = True
+        return
 
     @staticmethod
     def timer_on():
         """
         Call this function before execution to switch on the profiler
-        and print execution time for functions to stdout
         """
-        MyLogger.print_to_stdout = True
+        MyProfiler.timer_is_on = True
+        return
+
+    @staticmethod
+    def timer_off():
+        """
+        Call this function before execution to switch off the profiler
+        """
+        MyProfiler.timer_is_on = False
         return
 
     @staticmethod
@@ -26,29 +58,88 @@ class MyLogger:
         tab = "    "
         fun_name = func.__qualname__
 
+        if not MyProfiler.timer_is_on:
+
+            def wrapper(*args, **kwargs):
+                ret = func(*args, **kwargs)
+                return ret
+
+            return wrapper
+
         def wrapper(*args, **kwargs):
-            info_str = f"{tab*MyLogger.counter}{fun_name}() called"
-            if MyLogger.print_to_stdout:
-                print(f"[timer] {info_str:<40s}")
-            MyLogger.counter += 1
+            info_str = f"{tab*MyProfiler.counter}{fun_name}() called"
+            entry = {"msg": f"[timer] {info_str:<40s}", "type": "("}
+            MyProfiler.buffer.append(entry)
+
+            MyProfiler.counter += 1
             t0 = perf_counter_ns()
             ret = func(*args, **kwargs)
             t1 = perf_counter_ns()
             t_elapse = (t1 - t0) / 1e6  # unit: ms
-            MyLogger.counter -= 1
-            info_str = f"{tab*MyLogger.counter}{fun_name}() return"
-            if MyLogger.print_to_stdout:
-                print(
-                    f"[timer] {info_str:<80s}",
-                    f"({t_elapse:.2f} ms)",
-                )
+            MyProfiler.counter -= 1
+
+            info_str = f"{tab*MyProfiler.counter}{fun_name}() return"
+            entry = {
+                "msg": f"[timer] {info_str:<80s} ({t_elapse:.2f} ms)",
+                "type": ")",
+                "t": t_elapse,
+            }
+            MyProfiler.buffer.append(entry)
+
+            # Once the most outer function returns, we filter the buffer such
+            # that we only keep entry pairs whose elapse time is above threshold
+            if MyProfiler.counter == 0:
+                for idx, entry in enumerate(MyProfiler.buffer):
+                    if entry["type"] == "(":
+                        MyProfiler.istart.append(idx)
+                    if entry["type"] == ")":
+                        try:
+                            start_idx = MyProfiler.istart.pop()
+                            if entry["t"] > MyProfiler.t_min:
+                                MyProfiler.pairs[start_idx] = idx
+                        except IndexError:
+                            print("[Warning]Too many return message")
+
+                # Now our stack should be empty, otherwise we have unpaired
+                # called/return message
+                if MyProfiler.istart:
+                    print("[Warning]Too many called message")
+
+                # Now, we only keep the entries for expensive function calls
+                idx = list(MyProfiler.pairs.keys()) + list(MyProfiler.pairs.values())
+                if idx:
+                    idx.sort()
+                keep_buffer = [MyProfiler.buffer[i] for i in idx]
+
+                if MyProfiler.print_to_stdout:
+                    for txt in keep_buffer:
+                        print(txt["msg"])
+                else:
+                    if (
+                        os.path.exists(MyProfiler.log_name)
+                        and not MyProfiler.old_log_removed
+                    ):
+                        os.remove(MyProfiler.log_name)
+                        MyProfiler.old_log_removed = True
+                    with open(MyProfiler.log_name, "a") as f:
+                        for txt in keep_buffer:
+                            f.write(txt["msg"] + "\n")
+
+                # Save time information to dictionary
+
+                # Reset buffer and pairs
+                MyProfiler.buffer = []
+                MyProfiler.pairs = {}
             return ret
 
         return wrapper
 
 
-time_this = MyLogger.time_this
-timer_on = MyLogger.timer_on
+time_this = MyProfiler.time_this
+timer_on = MyProfiler.timer_on
+timer_off = MyProfiler.timer_off
+timer_to_stdout = MyProfiler.timer_to_stdout
+timer_set_threshold = MyProfiler.timer_set_threshold
 
 
 @time_this
@@ -165,7 +256,7 @@ def compute_basis_grad(Jq, detJq, Nderiv, invJq, Ngrad):
 
 
 @time_this
-def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
+def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, conn):
     """
     Compute dof, dof_each_node and conn_dof
 
@@ -174,7 +265,6 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
         nelems
         nnodes_per_elem
         ndof_per_node
-        nodes
         conn
 
     Return:
@@ -182,6 +272,7 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
         dof_each_node: the reshaped dof, (nnodes, ndof_per_node)
         conn_dof: nodal dof for each element, (nelems, nnodes_per_elem * ndof_per_node)
     """
+    nodes = np.arange(nnodes)
     if ndof_per_node == 1:
         dof = nodes
         dof_each_node = nodes
@@ -198,9 +289,10 @@ def create_dof(nnodes, nelems, nnodes_per_elem, ndof_per_node, nodes, conn):
     return dof, dof_each_node, conn_dof
 
 
-def to_vtk(nodes, conn, X, nodal_sol={}, vtk_name="problem.vtk"):
+@time_this
+def to_vtk(conn, X, nodal_sol={}, vtk_name="problem.vtk"):
     """
-    Generate a vtk given nodes, conn, X, and optionally nodal_sol
+    Generate a vtk given conn, X, and optionally nodal_sol
 
     Inputs:
         nnodes: ndarray
@@ -262,7 +354,7 @@ def to_vtk(nodes, conn, X, nodal_sol={}, vtk_name="problem.vtk"):
     if X.shape[1] == 2:
         X = np.append(X, np.zeros((X.shape[0], 1)), axis=1)
 
-    nnodes = len(nodes)
+    nnodes = X.shape[0]
     nelems = np.sum([len(c) for c in conn.values()])
 
     # Create a empty vtk file and write headers

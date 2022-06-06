@@ -1,12 +1,13 @@
 import numpy as np
 from scipy import sparse
 from scipy import special
-from scipy.sparse.linalg import spsolve, gmres
+from scipy.sparse.linalg import spsolve, gmres, cg
 from abc import ABC, abstractmethod
 import matplotlib.tri as tri
 import pyamg
 import utils
 from utils import time_this
+from typing import Callable
 
 
 class QuadratureBase(ABC):
@@ -299,10 +300,12 @@ class BasisTriangle2D(BasisBase):
         super().__init__(ndims, nnodes_per_elem, quadrature)
         return
 
+    @time_this
     def _eval_shape_fun_on_quad_pt(self, qpt):
         shape_vals = [qpt[0], qpt[1], 1 - qpt[0] - qpt[1]]
         return shape_vals
 
+    @time_this
     def _eval_shape_deriv_on_quad_pt(self, qpt):
         shape_derivs = [1.0, 0.0, 0.0, 1.0, -1.0, -1.0]
         return shape_derivs
@@ -317,7 +320,6 @@ class ModelBase(ABC):
     def __init__(
         self,
         ndof_per_node,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -327,7 +329,6 @@ class ModelBase(ABC):
     ):
         """
         ndof_per_node: int, number of component of state variable
-        nodes: 0-based nodal indices, (nnodes, )
         X: nodal location matrix, (nnodes, ndims)
         conn: connectivity matrix, (nelems, nnodes_per_elem)
         dof_fixed: list of dof indices to enforce boundary condition, (Ndof_bc, )
@@ -335,7 +336,6 @@ class ModelBase(ABC):
                         values are 0
         """
         self.ndof_per_node = ndof_per_node
-        self.nodes = np.array(nodes, dtype=int)
         self.X = np.array(X, dtype=float)
         self.conn = np.array(conn, dtype=int)
         self.dof_fixed = np.array(dof_fixed, dtype=int)
@@ -353,15 +353,12 @@ class ModelBase(ABC):
         self.ndims = X.shape[1]
         self.nquads = quadrature.get_nquads()
 
-        # Sanity check: nodes
-        assert len(self.nodes.shape) == 1  # shape check
-        assert self.nodes.min() == 0  # 0-based index check
-        assert self.nodes.max() == self.nodes.shape[0] - 1  # no-skip check
-        assert len(self.nodes) == len(set(self.nodes))  # no-duplicate check
+        # Set nodal numbering
+        self.nodes = np.arange(self.nnodes)
 
         # Sanity check: conn
         assert self.conn.min() == 0
-        assert self.conn.max() == self.nodes.shape[0] - 1
+        assert self.conn.max() == self.nnodes - 1
         assert len(set(self.conn.flatten())) == self.nnodes
 
         """
@@ -373,7 +370,6 @@ class ModelBase(ABC):
             self.nelems,
             self.nnodes_per_elem,
             self.ndof_per_node,
-            self.nodes,
             self.conn,
         )
 
@@ -551,6 +547,7 @@ class ModelBase(ABC):
         Outputs:
             rhs: global rhs, (nnodes * ndof_per_node, )
         """
+        rhs[:] = 0.0
         for n in range(self.quadrature.get_nquads()):
             np.add.at(rhs[:], self.conn_dof[:, n], rhs_e[:, n])
         return
@@ -612,12 +609,12 @@ class ModelBase(ABC):
         return K.tocsr()
 
 
-class LinearPoisson2D(ModelBase):
+class LinearPoisson(ModelBase):
     """
-    The 2-dimensional Poisson equation
+    The 2- or 3-dimensional Poisson equation
 
     Equation:
-    -∆u = g in Ω
+    -k∆u = g in Ω
 
     Boundary condition:
     u = u0 on ∂Ω
@@ -629,19 +626,49 @@ class LinearPoisson2D(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
         dof_fixed_vals,
         quadrature: QuadratureBase,
         basis: BasisBase,
+        gfunc: Callable,
+        kappa0=1.0,
+        p=0.0,
     ):
+        """
+        Inputs:
+            gfunc: source term, takes takes in x and return vals, where
+                   x[..., 0] = xvals
+                   x[..., 1] = yvals
+                   x[..., 2] = zvals if is 3D problem
+                   vals.shape == x[..., 0].shape
+            kappa0: the thermal conductivity of the material
+            p: RAMP penalization (for topology optimization)
+        """
         ndof_per_node = 1
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
+        self.gfunc = gfunc
         self.fun_vals = None
+        self.kappa0 = kappa0
+        self.p = p
+
+        # Allocate memory
+        self.rho_e = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.rho_q = np.zeros((self.nelems, self.nquads))
+        self.kappa_q = np.zeros((self.nelems, self.nquads))
+        self.kappa_q_deriv = np.zeros((self.nelems, self.nquads, self.nnodes_per_elem))
+        self.inner = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.Ke_deriv = np.zeros(
+            (
+                self.nelems,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem,
+            )
+        )
         return
 
     @time_this
@@ -654,7 +681,7 @@ class LinearPoisson2D(ModelBase):
         return self.rhs
 
     @time_this
-    def compute_jacobian(self):
+    def compute_jacobian(self, rho=1.0):
         """
         Compute the element Jacobian (stiffness) matrices Ke and assemble the
         global K
@@ -662,6 +689,17 @@ class LinearPoisson2D(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
+        # Set nodal density
+        if not hasattr(rho, "__len__"):
+            rho = np.ones(self.nnodes) * rho
+
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.Ke_mat = self.Ke_mat.astype(complex)
+
+        # Update self.kappa_q
+        self._update_material_property(rho)
+
         # Compute element Jacobian matrix -> Ke_mat
         self._compute_element_jacobian(self.Ke_mat)
 
@@ -670,10 +708,80 @@ class LinearPoisson2D(ModelBase):
         return K
 
     @time_this
+    def compliance(self, rho, solver="cg"):
+        """
+        Compute the thermal compliance function given nodal density
+
+        Inputs:
+            rho: nodal (usually filtered) density
+            solver: cg or direct, note that for a complex step, direct must be
+                    used
+
+        Return:
+            c: compliance scalar
+            u: solution vector
+        """
+        assert solver == "cg" or solver == "direct"
+
+        # Construct the linear system
+        K = self.compute_jacobian(rho)
+        rhs = self.compute_rhs()
+
+        # Apply Dirichlet boundary conditions
+        K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+        # Solve the linear system
+        if solver == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if fail:
+                raise RuntimeError(f"CG failed with code {fail}")
+
+        c = rhs.dot(u)
+        return c, u
+
+    @time_this
+    def compliance_grad(self, rho, u):
+        """
+        Compute the thermal compliance function gradient w.r.t. nodal density
+        Inputs:
+            rho: nodal (usually filtered) density
+            u: solution vector
+
+        Return:
+            grad: gradient with respect to rho
+        """
+        grad = -self._compute_K_dv_sens(rho, u, u)
+        return grad
+
+    @time_this
+    def volume(self, rho):
+        """
+        Compute the normalized volume of the design
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        vol = rho.sum() / self.nnodes
+        return vol
+
+    @time_this
+    def volume_grad(self, rho):
+        """
+        Compute the gradient of the normalized volume with respect to rho
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        grad = np.ones(self.nnodes) / self.nnodes
+        return grad
+
+    @time_this
     def _compute_gfun(self, Xq, fun_vals):
-        xvals = Xq[..., 0]
-        yvals = Xq[..., 1]
-        fun_vals[...] = xvals * (xvals - 5.0) * (xvals - 10.0) * yvals * (yvals - 4.0)
+        fun_vals[...] = self.gfunc(Xq)
         return
 
     @time_this
@@ -704,7 +812,7 @@ class LinearPoisson2D(ModelBase):
         if self.fun_vals is None:
             self.fun_vals = np.zeros(self.Xq.shape[0:-1])
 
-        # Evaluate function g
+        # Evaluate function g at each quadrature point q
         self._compute_gfun(self.Xq, self.fun_vals)
 
         # Get quadrature weights
@@ -719,7 +827,7 @@ class LinearPoisson2D(ModelBase):
         """
         Evaluate element-wise Jacobian matrices
 
-            Ke = ∑ detJq wq ( NxNxT + NyNyT)_q
+            Ke = ∑ detJq wq ( NxNxT + NyNyT + ...)_q
                  q
 
         Outputs:
@@ -742,8 +850,112 @@ class LinearPoisson2D(ModelBase):
         wq = self.quadrature.get_weight()
 
         Ke[...] = np.einsum(
-            "iq,q,iqjl,iqkl -> ijk", self.detJq, wq, self.Ngrad, self.Ngrad
+            "iq,iq,q,iqjl,iqkl -> ijk",
+            self.kappa_q,
+            self.detJq,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            optimize=True,
         )
+        return
+
+    @time_this
+    def _compute_K_dv_sens(self, rho, phi, psi):
+        """
+        Compute the sensitivity of scalar value (phi^T K psi) w.r.t. nodal
+        density rho
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Get quadrature weights
+        wq = self.quadrature.get_weight()
+
+        # Compute material property w.r.t. rho -> self.kappa_q_deriv
+        self._update_material_property_deriv(rho)
+
+        self.Ke_deriv[...] = np.einsum(
+            "iqo,iq,q,iqjl,iqkl -> ijko",
+            self.kappa_q_deriv,
+            self.detJq,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            optimize=True,
+        )
+
+        # Compute the derivative of the inner product for each element
+        self.inner[...] = np.einsum(
+            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        )
+
+        # Assemble the derivative
+        dfdrho = np.zeros(self.nnodes)
+        for i in range(self.nnodes_per_elem):
+            np.add.at(dfdrho, self.conn[:, i], self.inner[:, i])
+        return dfdrho
+
+    @time_this
+    def _update_material_property(self, rho):
+        """
+        Update material property on quadrature points given nodal density. RAMP
+        penalization is used, hence the material kappa is multiplied by a factor
+        of rho / (1 + p * (1 - rho))
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.kappa_q = self.kappa_q.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density at each quadrature point
+        self.kappa_q[:] = self.rho_q / (1 + self.p * (1 - self.rho_q))
+        return
+
+    @time_this
+    def _update_material_property_deriv(self, rho):
+        """
+        Update material property on quadrature points w.r.t. nodal density. RAMP
+        penalization is used, hence the material kappa is multiplied by a factor
+        of (1 + p) / (1 + p * (1 - rho))**2
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.kappa_q_deriv = self.kappa_q_deriv.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density derivative at each quadrature point
+        ramp_rho_q_deriv = (1 + self.p) / (1 + self.p * (1 - self.rho_q)) ** 2
+
+        N = self.basis.eval_shape_fun()
+        self.kappa_q_deriv[...] = np.einsum("ql,iq -> iql", N, ramp_rho_q_deriv)
         return
 
 
@@ -774,7 +986,6 @@ class NonlinearPoisson2D(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -784,7 +995,7 @@ class NonlinearPoisson2D(ModelBase):
     ):
         ndof_per_node = 1
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
         self.gfun_vals = None
         self.hfun_vals = None
@@ -1101,7 +1312,6 @@ class LinearElasticity(ModelBase):
     @time_this
     def __init__(
         self,
-        nodes,
         X,
         conn,
         dof_fixed,
@@ -1111,31 +1321,23 @@ class LinearElasticity(ModelBase):
         basis: BasisBase,
         E=10.0,
         nu=0.3,
+        p=0.0,
     ):
+        """
+        Inputs:
+            p: RAMP penalization
+        """
         # Infer the problem dimensions
         ndof_per_node = X.shape[1]
 
         # Call base class's constructor
         super().__init__(
-            ndof_per_node, nodes, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
         )
 
-        # Plane stress-specific variables
         self.nodal_force = nodal_force
 
-        if ndof_per_node == 2:
-            self.C = E * np.array(
-                [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
-            )
-            self.C *= 1.0 / (1.0 - nu**2)
-        else:
-            self.C = np.zeros((6, 6))
-            self.C[0, 0] = self.C[1, 1] = self.C[2, 2] = 1 - nu
-            self.C[0, 1] = self.C[0, 2] = self.C[1, 0] = nu
-            self.C[1, 2] = self.C[2, 0] = self.C[2, 1] = nu
-            self.C[3, 3] = self.C[4, 4] = self.C[5, 5] = 0.5 - nu
-            self.C *= E / ((1 + nu) * (1 - 2 * nu))
-
+        # Allocate B matrix
         n_stress_tensor = int(ndof_per_node * (ndof_per_node + 1) / 2)
         self.Be = np.zeros(
             (
@@ -1145,6 +1347,45 @@ class LinearElasticity(ModelBase):
                 self.nnodes_per_elem * ndof_per_node,
             )
         )
+
+        # Allocate material property at quadratures
+        self.Cq = np.zeros((self.nelems, self.nquads))
+        self.Cqderiv = np.zeros(
+            (
+                self.nelems,
+                self.nquads,
+                self.nnodes_per_elem,
+            )
+        )
+
+        # Allocate rho at element and quadrature
+        self.rho_e = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.rho_q = np.zeros((self.nelems, self.nquads))
+
+        self.inner = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.Ke_deriv = np.zeros(
+            (
+                self.nelems,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem,
+            )
+        )
+        self.p = p
+
+        # Compute constitutive matrix
+        if ndof_per_node == 2:
+            self.C0 = E * np.array(
+                [[1.0, nu, 0.0], [nu, 1.0, 0.0], [0.0, 0.0, 0.5 * (1.0 - nu)]]
+            )
+            self.C0 *= 1.0 / (1.0 - nu**2)
+        else:
+            self.C0 = np.zeros((6, 6))
+            self.C0[0, 0] = self.C0[1, 1] = self.C0[2, 2] = 1 - nu
+            self.C0[0, 1] = self.C0[0, 2] = self.C0[1, 0] = nu
+            self.C0[1, 2] = self.C0[2, 0] = self.C0[2, 1] = nu
+            self.C0[3, 3] = self.C0[4, 4] = self.C0[5, 5] = 0.5 - nu
+            self.C0 *= E / ((1 + nu) * (1 - 2 * nu))
         return
 
     @time_this
@@ -1158,7 +1399,7 @@ class LinearElasticity(ModelBase):
         return self.rhs
 
     @time_this
-    def compute_jacobian(self):
+    def compute_jacobian(self, rho=1.0):
         """
         Compute the element Jacobian (stiffness) matrices Ke and assemble the
         global K
@@ -1166,12 +1407,198 @@ class LinearElasticity(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
+        # Set nodal density
+        if not hasattr(rho, "__len__"):
+            rho = np.ones(self.nnodes) * rho
+
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.Ke_mat = self.Ke_mat.astype(complex)
+
+        # Update self.Cq
+        self._update_material_property(rho)
+
         # Compute element Jacobian matrix -> Ke
         self._compute_element_jacobian(self.Ke_mat)
 
         # Assemble global Jacobian -> K
         K = self._assemble_jacobian(self.Ke_mat)
         return K
+
+    @time_this
+    def compliance(self, rho, solver="cg"):
+        """
+        Compute the compliance function given nodal density
+
+        Inputs:
+            rho: nodal (usually filtered) density
+            solver: cg or direct, note that for a complex step, direct must be
+                    used
+
+        Return:
+            c: compliance scalar
+            u: solution vector
+        """
+        assert solver == "cg" or solver == "direct"
+
+        # Construct the linear system
+        K = self.compute_jacobian(rho)
+        rhs = self.compute_rhs()
+
+        # Apply Dirichlet boundary conditions
+        K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+        # Solve the linear system
+        if solver == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if fail:
+                raise RuntimeError(f"CG failed with code {fail}")
+
+        c = rhs.dot(u)
+        return c, u
+
+    @time_this
+    def compliance_grad(self, rho, u):
+        """
+        Compute the compliance function gradient w.r.t. nodal density
+        Inputs:
+            rho: nodal (usually filtered) density
+            u: solution vector
+
+        Return:
+            grad: gradient with respect to rho
+        """
+        grad = -self._compute_K_dv_sens(rho, u, u)
+        return grad
+
+    @time_this
+    def volume(self, rho):
+        """
+        Compute the normalized volume of the design
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        vol = rho.sum() / self.nnodes
+        return vol
+
+    @time_this
+    def volume_grad(self, rho):
+        """
+        Compute the gradient of the normalized volume with respect to rho
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        grad = np.ones(self.nnodes) / self.nnodes
+        return grad
+
+    @time_this
+    def _compute_K_dv_sens(self, rho, phi, psi):
+        """
+        Compute the sensitivity of scalar value (phi^T K psi) w.r.t. nodal
+        density rho
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Compute Be matrix -> Be
+        self._compute_element_Bmat(self.Ngrad, self.Be)
+
+        # Get quadrature weights
+        wq = self.quadrature.get_weight()
+
+        # Compute material property w.r.t. rho -> self.Cqderiv
+        self._update_material_property_deriv(rho)
+
+        # Compute derivative of Ke w.r.t. rho
+        self.Ke_deriv[...] = np.einsum(
+            "iq,q,iqnj,iqo,nm,iqmk->ijko",
+            self.detJq,
+            wq,
+            self.Be,
+            self.Cqderiv,
+            self.C0,
+            self.Be,
+            optimize=True,
+        )
+
+        # Compute the derivative of the inner product for each element
+        self.inner[...] = np.einsum(
+            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        )
+
+        # Assemble the derivative
+        dfdrho = np.zeros(self.nnodes)
+        for i in range(self.nnodes_per_elem):
+            np.add.at(dfdrho, self.conn[:, i], self.inner[:, i])
+        return dfdrho
+
+    @time_this
+    def _update_material_property(self, rho):
+        """
+        Update material property on quadrature points given nodal density. RAMP
+        penalization is used, hence the material C is multiplied by a factor of
+        rho / (1 + p * (1 - rho))
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.Cq = self.Cq.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density at each quadrature point
+        self.Cq[:] = self.rho_q / (1 + self.p * (1 - self.rho_q))
+        return
+
+    @time_this
+    def _update_material_property_deriv(self, rho):
+        """
+        Update material property on quadrature points w.r.t. nodal density. RAMP
+        penalization is used, hence the material C0 is multiplied by a factor of
+        (1 + p) / (1 + p * (1 - rho))**2
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.Cqderiv = self.Cqderiv.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density derivative at each quadrature point
+        ramp_rho_q_deriv = (1 + self.p) / (1 + self.p * (1 - self.rho_q)) ** 2
+
+        N = self.basis.eval_shape_fun()
+        self.Cqderiv[...] = np.einsum("ql,iq -> iql", N, ramp_rho_q_deriv)
+        return
 
     @time_this
     def _compute_element_Bmat(self, Ngrad, Be):
@@ -1251,21 +1678,13 @@ class LinearElasticity(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        # path, info = np.einsum_path(
-        #     "iq,q,iqnj,nm,iqmk->ijk",
-        #     self.detJq,
-        #     wq,
-        #     self.Be,
-        #     self.C,
-        #     self.Be,
-        #     optimize="optimal",
-        # )
         Ke[...] = np.einsum(
-            "iq,q,iqnj,nm,iqmk->ijk",
+            "iq,q,iqnj,iq,nm,iqmk->ijk",
             self.detJq,
             wq,
             self.Be,
-            self.C,
+            self.Cq,
+            self.C0,
             self.Be,
             optimize=True,
         )
@@ -1286,20 +1705,21 @@ class Helmholtz(ModelBase):
     """
 
     @time_this
-    def __init__(
-        self, r0, nodes, X, conn, quadrature: QuadratureBase, basis: BasisBase
-    ):
+    def __init__(self, r0, X, conn, quadrature: QuadratureBase, basis: BasisBase):
         """
         Inputs:
             r0: filter radius
         """
-        super().__init__(1, nodes, X, conn, [], None, quadrature, basis)
+        super().__init__(1, X, conn, [], None, quadrature, basis)
 
         self.r0 = r0
         self.Re = np.zeros((self.nelems, self.nnodes_per_elem, self.nnodes_per_elem))
         self._compute_element_jacobian_and_rhs(self.Ke_mat, self.Re)
         self.R = self._assemble_jacobian(self.Re)
+        self.RT = self.R.transpose()
         self.K = self._assemble_jacobian(self.Ke_mat)
+        # self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
+        self.Ksolve = pyamg.ruge_stuben_solver(self.K)
         return
 
     @time_this
@@ -1307,7 +1727,16 @@ class Helmholtz(ModelBase):
         """
         Apply the Helmholtz filter to x -> rho
         """
-        return spsolve(self.K, self.compute_rhs(x))
+        rho = self.Ksolve.solve(self.compute_rhs(x), tol=1e-8)
+        return rho
+
+    @time_this
+    def apply_gradient(self, gradrho):
+        """
+        Apply the Helmholtz filter to the gradient ∇_rho -> ∇x
+        """
+        gradx = self.RT.dot(self.Ksolve.solve(gradrho, tol=1e-8))
+        return gradx
 
     @time_this
     def compute_rhs(self, x):
@@ -1366,6 +1795,99 @@ class Helmholtz(ModelBase):
 
         Ke[...] += Re[...]
 
+        return
+
+
+class A2DWrapper(ModelBase):
+    """
+    An experimental class that wraps around a2d (https://github.com/gjkennedy/a2d)
+    """
+
+    @time_this
+    def __init__(self, X, conn, dof_fixed, dof_fixed_vals, a2d, problem_info):
+        """
+        Inputs:
+            ...
+            a2d: the a2d library
+            problem_info: the problem information, dictionary
+                          problem_info = {
+                              'type': 'elasticity',
+                              'E': E,
+                              'nu': nu
+                          }
+                          or
+                          problem_info = {
+                              'type': 'helmholtz',
+                              'r0': r0
+                          }
+
+        """
+
+        nelems = conn.shape[0]
+        nnodes = X.shape[0]
+
+        if problem_info["type"] == "elasticity":
+            a2dmodel = a2d.Elasticity(nelems, nnodes)
+        elif problem_info["type"] == "helmholtz":
+            a2dmodel = a2d.Helmholtz(nelems, nnodes)
+        else:
+            raise ValueError(f"Unknown problem_info {problem_info}")
+
+        # Set connectivity numpy array and update underlying c++ data
+        self.conn = np.array(a2dmodel.get_conn(), copy=False)
+        self.conn[:] = conn[:]
+
+        # Set nodal location numpy array and update underlying c++ data
+        self.X = np.array(a2dmodel.get_nodes(), copy=False)
+        self.X[:] = X[:]
+        a2dmodel.reset_nodes()  # Required after node location change
+
+        # Set material property numpy array and update underlying c++ data
+        self.data = np.array(a2dmodel.get_quad_data(), copy=False)
+        if problem_info["type"] == "elasticity":
+            E = problem_info["E"]
+            nu = problem_info["nu"]
+            mu = E / (2 * (1 + nu))
+            lam = E * nu / (1 + nu) / (1 - 2 * nu)
+            self.data[:, :, 0] = mu  # Lame parameter: mu
+            self.data[:, :, 1] = lam  # Lame parameter: lambda
+        elif problem_info["type"] == "helmholtz":
+            self.data[:] = problem_info["r0"]
+
+        # Set solution numpy array and update underlying c++ data
+        self.U = np.array(a2dmodel.get_solution(), copy=False)
+        self.U[:] = 0.0
+        a2dmodel.reset_solution()  # Required after solution change
+
+        # Set element-wise Jacobian numpy array and update underlying c++ data
+        self.jac = np.array(a2dmodel.get_elem_jac(), copy=False)
+        self.jac[:] = 0.0
+
+        self.a2dmodel = a2dmodel
+
+        # Call constructor for the parent class, note that for now only 8-node
+        # block element is supported
+        ndof_per_node = self.U.shape[-1]
+        quadrature = QuadratureBlock3D()
+        basis = BasisBlock3D(quadrature)
+        super().__init__(
+            ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
+        )
+
+    @time_this
+    def compute_rhs(self):
+        return None  # TODO
+
+    @time_this
+    def compute_jacobian(self):
+        self._compute_jacobian_tensor()
+        self._jacobian_tensor_to_mat(self.jac, self.Ke_mat)
+        K = self._assemble_jacobian(self.Ke_mat)
+        return K
+
+    @time_this
+    def _compute_jacobian_tensor(self):
+        self.a2dmodel.add_jacobians()
         return
 
 
@@ -1588,7 +2110,6 @@ class ProblemCreator:
         self.nnodes_z = nnodes_z
         self.nnodes = nnodes_x * nnodes_y * nnodes_z
         self.nodes3d = nodes3d
-        self.nodes = nodes3d.flatten()
         self.conn = conn
         self.X = X[:, 0 : self.ndims]
 
@@ -1601,8 +2122,7 @@ class ProblemCreator:
         for k in range(self.nnodes_z):
             for j in range(self.nnodes_y):
                 dof_fixed.append(self.nodes3d[k, j, 0])
-                dof_fixed.append(self.nodes3d[k, j, -1])
-        return self.nodes, self.conn, self.X, dof_fixed
+        return self.conn, self.X, dof_fixed
 
     @time_this
     def create_linear_elasticity_problem(self):
@@ -1616,11 +2136,14 @@ class ProblemCreator:
         # Set nodal force
         nodal_force = {}
         for k in range(self.nnodes_z):
-            for j in range(self.nnodes_y):
-                nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
-            # nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
+            # for j in range(self.nnodes_y):
+            #     if j < self.nnodes_y / 10:
+            #         nodal_force[self.nodes3d[k, j, -1]] = [0.0, -1.0, 0.0][
+            #             0 : self.ndims
+            #         ]
+            nodal_force[self.nodes3d[k, 0, -1]] = [0.0, -1.0, 0.0][0 : self.ndims]
 
-        return self.nodes, self.conn, self.X, dof_fixed, nodal_force
+        return self.conn, self.X, dof_fixed, nodal_force
 
     @time_this
     def create_helmhotz_problem(self):
@@ -1638,4 +2161,4 @@ class ProblemCreator:
                     else:
                         x[idx] = 1e-3
                     idx += 1
-        return self.nodes, self.conn, self.X, x
+        return self.conn, self.X, x

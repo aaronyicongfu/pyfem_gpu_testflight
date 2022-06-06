@@ -13,7 +13,7 @@ class NonLinearPoissonCase(unittest.TestCase):
 
         # create a structure
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
-        nodes, conn, X, dof_fixed = creator.create_poisson_problem()
+        conn, X, dof_fixed = creator.create_poisson_problem()
 
         """ Compute u_ref """
         problem = PoissonProblem(10)
@@ -25,9 +25,7 @@ class NonLinearPoissonCase(unittest.TestCase):
         """ Compute u """
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.NonlinearPoisson2D(
-            nodes, X, conn, dof_fixed, None, quadrature, basis
-        )
+        model = pyfem.NonlinearPoisson2D(X, conn, dof_fixed, None, quadrature, basis)
         assembler = pyfem.Assembler(model)
 
         method = ["direct", "gmres"]

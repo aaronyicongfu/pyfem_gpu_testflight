@@ -24,16 +24,14 @@ utils.timer_on()
 
 # Set up the meshing utility and create the problem mesh
 creator = pyfem.ProblemCreator(args.nx, args.ny, args.nz, element_type="block")
-nodes, conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
+conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 # Set up 3-dimensional block quadrature and basis
 quadrature = pyfem.QuadratureBlock3D()
 basis = pyfem.BasisBlock3D(quadrature)
 
 # Set up linear elasticity model
-model = pyfem.LinearElasticity(
-    nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
-)
+model = pyfem.LinearElasticity(X, conn, dof_fixed, None, nodal_force, quadrature, basis)
 
 if args.assemble_only:
     K = model.compute_jacobian()
@@ -52,7 +50,7 @@ else:
     uz = u[2::3]
     sol = {"ux": ux, "uy": uy, "uz": uz}
 
-    utils.to_vtk(nodes, conn, X, sol)
+    utils.to_vtk(conn, X, sol)
 
 print("summary")
 print(f"nnodes: {X.shape[0]}")

@@ -1,33 +1,44 @@
 import numpy as np
 import unittest
 import sys
-from ref_linear_poisson import Poisson
-from ref_linear_poisson import gfunc as gfunc_ref
 
 sys.path.append("..")
 import pyfem
 
 
-def gfunc(x):
-    _x = x[..., 0]
-    _y = x[..., 1]
-    return _x * (_x - 5.0) * (_x - 10.0) * _y * (_y - 4.0)
+def ref_plane_stress(conn, X, dof_fixed, nodal_force):
+    from ref_plane_stress import PlaneStress
+
+    bcs = {}
+    for dof_idx in dof_fixed:
+        node_idx = dof_idx // 2
+        if node_idx not in bcs.keys():
+            bcs[node_idx] = [0, 1]
+    ps = PlaneStress(conn, X, bcs, nodal_force)
+    u_ref = ps.solve()
+    return u_ref
 
 
-class LinearPoissonCase(unittest.TestCase):
-    def test_linear_poisson(self):
+class PlaneStress(unittest.TestCase):
+    def test_plane_stress(self):
         # Compute u
         creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
-        conn, X, dof_fixed = creator.create_poisson_problem()
+        (
+            conn,
+            X,
+            dof_fixed,
+            nodal_force,
+        ) = creator.create_linear_elasticity_problem()
         quadrature = pyfem.QuadratureBilinear2D()
         basis = pyfem.BasisBilinear2D(quadrature)
-        model = pyfem.LinearPoisson(X, conn, dof_fixed, None, quadrature, basis, gfunc)
+        model = pyfem.LinearElasticity(
+            X, conn, dof_fixed, None, nodal_force, quadrature, basis
+        )
         assembler = pyfem.Assembler(model)
         u = assembler.solve(method="direct")
 
         # Compute u_ref
-        poisson = Poisson(conn, X, dof_fixed, gfunc_ref)
-        u_ref = poisson.solve()
+        u_ref = ref_plane_stress(conn, X, dof_fixed, nodal_force)
 
         # Compare
         np.random.seed(123)
@@ -36,7 +47,7 @@ class LinearPoissonCase(unittest.TestCase):
         pTu_ref = p.dot(u_ref)
         print(f"pTu    :{pTu}")
         print(f"pTu_ref:{pTu_ref}")
-        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0, delta=1e-10)
+        self.assertAlmostEqual((pTu - pTu_ref) / pTu, 0.0, delta=1e-10)
         return
 
 
@@ -58,15 +69,19 @@ class ElasticityDerivative(unittest.TestCase):
         """
         Test the derivative of phi^T K psi w.r.t. nodal variable x
         """
-
-        conn, X, dof_fixed = creator.create_poisson_problem()
-        model = pyfem.LinearPoisson(
-            X, conn, dof_fixed, None, quadrature, basis, gfunc, p=5.0
+        (
+            conn,
+            X,
+            dof_fixed,
+            nodal_force,
+        ) = creator.create_linear_elasticity_problem()
+        model = pyfem.LinearElasticity(
+            X, conn, dof_fixed, None, nodal_force, quadrature, basis, p=5.0
         )
 
         np.random.seed(0)
         nnodes = X.shape[0]
-        ndof = X.shape[0]
+        ndof = X.shape[0] * X.shape[1]
         phi = np.random.rand(ndof)
         psi = np.random.rand(ndof)
 
@@ -89,9 +104,14 @@ class ElasticityDerivative(unittest.TestCase):
         return
 
     def run_compliance_gradient(self, creator, quadrature, basis):
-        conn, X, dof_fixed = creator.create_poisson_problem()
-        model = pyfem.LinearPoisson(
-            X, conn, dof_fixed, None, quadrature, basis, gfunc, p=5.0
+        (
+            conn,
+            X,
+            dof_fixed,
+            nodal_force,
+        ) = creator.create_linear_elasticity_problem()
+        model = pyfem.LinearElasticity(
+            X, conn, dof_fixed, None, nodal_force, quadrature, basis, p=5.0
         )
 
         np.random.seed(0)
@@ -106,7 +126,6 @@ class ElasticityDerivative(unittest.TestCase):
 
         c_cs, _ = model.compliance(rho + 1j * p * h, solver="direct")
         grad_cs = c_cs.imag / h
-        print("compliance:", c)
         print(f"grad:    {grad:.15e}")
         print(f"grad_cs: {grad_cs:.15e}")
         self.assertAlmostEqual((grad - grad_cs) / grad, 0.0, delta=1e-10)

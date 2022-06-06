@@ -15,7 +15,6 @@ def run_problem(element_type):
     # with boundary condition and loads
     creator = pyfem.ProblemCreator(nnodes_x=96, nnodes_y=96, element_type=element_type)
     (
-        nodes,
         conn,
         X,
         dof_fixed,
@@ -32,7 +31,7 @@ def run_problem(element_type):
 
     # Create the physical model
     model = pyfem.LinearElasticity(
-        nodes, X, conn, dof_fixed, None, nodal_force, quadrature, basis
+        X, conn, dof_fixed, None, nodal_force, quadrature, basis
     )
     assembler = pyfem.Assembler(model)
 
@@ -45,7 +44,7 @@ def run_problem(element_type):
     umag = (ux**2 + uy**2) ** 0.5
 
     # Save the mesh and solution to vtk
-    utils.to_vtk(nodes, conn, X, {"ux": ux, "uy": uy}, vtk_name=f"{element_type}.vtk")
+    utils.to_vtk(conn, X, {"ux": ux, "uy": uy}, vtk_name=f"{element_type}.vtk")
     return umag, assembler
 
 

@@ -1,5 +1,4 @@
 import os
-from posixpath import abspath
 import numpy as np
 import argparse
 import re
@@ -14,7 +13,6 @@ class InpParser:
     def __init__(self, inp_name):
         self.inp_name = inp_name
 
-        self.nodes = None
         self.conn = None
         self.X = None
         self.groups = None
@@ -43,7 +41,6 @@ class InpParser:
         Parse the inp file.
 
         Return:
-            nodes: nodal indices, (nnodes,)
             conn: a dictionary of connectivity, conn[element_type] = conn_array
             X: nodal locations, (nnodes, ndof_per_node)
             groups: grouped nodes, dictionary, groups[name] = [...]
@@ -72,9 +69,6 @@ class InpParser:
             X = chunks_node[0]["data"]
         X = np.array(X)
 
-        # Create nodal numbering
-        nodes = np.arange(len(X))
-
         # Parse connectivity for different element types
         conn = {}
         for c in chunks_element:
@@ -85,11 +79,10 @@ class InpParser:
         for c in chunks_nset:
             groups[c["nset"]] = np.array(c["data"])
 
-        self.nodes = nodes
         self.conn = conn
         self.X = X
         self.groups = groups
-        return nodes, conn, X, groups
+        return conn, X, groups
 
     def to_vtk(self, nodal_sol={}, vtk_name=None):
         """
@@ -106,12 +99,12 @@ class InpParser:
                         }
             vtk_name: name of the vtk
         """
-        if self.nodes is None:
+        if self.conn is None:
             self.parse()
 
         if vtk_name is None:
             vtk_name = "{:s}.vtk".format(os.path.splitext(self.inp_name)[0])
-        utils.to_vtk(self.nodes, self.conn, self.X, nodal_sol, vtk_name)
+        utils.to_vtk(self.conn, self.X, nodal_sol, vtk_name)
         return
 
     def _sort_B_by_A(self, A, B):
