@@ -6,7 +6,7 @@ import numpy as np
 import os
 
 
-class MyLogger:
+class MyProfiler:
     counter = 0  # a static variable
     timer_is_on = True
     print_to_stdout = False
@@ -16,13 +16,14 @@ class MyLogger:
     t_min = 1  # unit: ms
     log_name = "profiler.log"
     old_log_removed = False
+    saved_times = {}
 
     @staticmethod
     def timer_set_threshold(t: float):
         """
         Don't show entries with elapse time smaller than this. Unit: ms
         """
-        MyLogger.t_min = t
+        MyProfiler.t_min = t
         return
 
     @staticmethod
@@ -30,7 +31,7 @@ class MyLogger:
         """
         print the profiler output to stdout, otherwise save it as a file
         """
-        MyLogger.print_to_stdout = True
+        MyProfiler.print_to_stdout = True
         return
 
     @staticmethod
@@ -38,7 +39,7 @@ class MyLogger:
         """
         Call this function before execution to switch on the profiler
         """
-        MyLogger.timer_is_on = True
+        MyProfiler.timer_is_on = True
         return
 
     @staticmethod
@@ -46,7 +47,7 @@ class MyLogger:
         """
         Call this function before execution to switch off the profiler
         """
-        MyLogger.timer_is_on = False
+        MyProfiler.timer_is_on = False
         return
 
     @staticmethod
@@ -57,7 +58,7 @@ class MyLogger:
         tab = "    "
         fun_name = func.__qualname__
 
-        if not MyLogger.timer_is_on:
+        if not MyProfiler.timer_is_on:
 
             def wrapper(*args, **kwargs):
                 ret = func(*args, **kwargs)
@@ -66,77 +67,79 @@ class MyLogger:
             return wrapper
 
         def wrapper(*args, **kwargs):
-            info_str = f"{tab*MyLogger.counter}{fun_name}() called"
+            info_str = f"{tab*MyProfiler.counter}{fun_name}() called"
             entry = {"msg": f"[timer] {info_str:<40s}", "type": "("}
-            MyLogger.buffer.append(entry)
+            MyProfiler.buffer.append(entry)
 
-            MyLogger.counter += 1
+            MyProfiler.counter += 1
             t0 = perf_counter_ns()
             ret = func(*args, **kwargs)
             t1 = perf_counter_ns()
             t_elapse = (t1 - t0) / 1e6  # unit: ms
-            MyLogger.counter -= 1
+            MyProfiler.counter -= 1
 
-            info_str = f"{tab*MyLogger.counter}{fun_name}() return"
+            info_str = f"{tab*MyProfiler.counter}{fun_name}() return"
             entry = {
                 "msg": f"[timer] {info_str:<80s} ({t_elapse:.2f} ms)",
                 "type": ")",
                 "t": t_elapse,
             }
-            MyLogger.buffer.append(entry)
+            MyProfiler.buffer.append(entry)
 
             # Once the most outer function returns, we filter the buffer such
             # that we only keep entry pairs whose elapse time is above threshold
-            if MyLogger.counter == 0:
-                for idx, entry in enumerate(MyLogger.buffer):
+            if MyProfiler.counter == 0:
+                for idx, entry in enumerate(MyProfiler.buffer):
                     if entry["type"] == "(":
-                        MyLogger.istart.append(idx)
+                        MyProfiler.istart.append(idx)
                     if entry["type"] == ")":
                         try:
-                            start_idx = MyLogger.istart.pop()
-                            if entry["t"] > MyLogger.t_min:
-                                MyLogger.pairs[start_idx] = idx
+                            start_idx = MyProfiler.istart.pop()
+                            if entry["t"] > MyProfiler.t_min:
+                                MyProfiler.pairs[start_idx] = idx
                         except IndexError:
                             print("[Warning]Too many return message")
 
                 # Now our stack should be empty, otherwise we have unpaired
                 # called/return message
-                if MyLogger.istart:
+                if MyProfiler.istart:
                     print("[Warning]Too many called message")
 
                 # Now, we only keep the entries for expensive function calls
-                idx = list(MyLogger.pairs.keys()) + list(MyLogger.pairs.values())
+                idx = list(MyProfiler.pairs.keys()) + list(MyProfiler.pairs.values())
                 if idx:
                     idx.sort()
-                keep_buffer = [MyLogger.buffer[i] for i in idx]
+                keep_buffer = [MyProfiler.buffer[i] for i in idx]
 
-                if MyLogger.print_to_stdout:
+                if MyProfiler.print_to_stdout:
                     for txt in keep_buffer:
                         print(txt["msg"])
                 else:
                     if (
-                        os.path.exists(MyLogger.log_name)
-                        and not MyLogger.old_log_removed
+                        os.path.exists(MyProfiler.log_name)
+                        and not MyProfiler.old_log_removed
                     ):
-                        os.remove(MyLogger.log_name)
-                        MyLogger.old_log_removed = True
-                    with open(MyLogger.log_name, "a") as f:
+                        os.remove(MyProfiler.log_name)
+                        MyProfiler.old_log_removed = True
+                    with open(MyProfiler.log_name, "a") as f:
                         for txt in keep_buffer:
                             f.write(txt["msg"] + "\n")
 
+                # Save time information to dictionary
+
                 # Reset buffer and pairs
-                MyLogger.buffer = []
-                MyLogger.pairs = {}
+                MyProfiler.buffer = []
+                MyProfiler.pairs = {}
             return ret
 
         return wrapper
 
 
-time_this = MyLogger.time_this
-timer_on = MyLogger.timer_on
-timer_off = MyLogger.timer_off
-timer_to_stdout = MyLogger.timer_to_stdout
-timer_set_threshold = MyLogger.timer_set_threshold
+time_this = MyProfiler.time_this
+timer_on = MyProfiler.timer_on
+timer_off = MyProfiler.timer_off
+timer_to_stdout = MyProfiler.timer_to_stdout
+timer_set_threshold = MyProfiler.timer_set_threshold
 
 
 @time_this
