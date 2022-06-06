@@ -548,6 +548,7 @@ class ModelBase(ABC):
         Outputs:
             rhs: global rhs, (nnodes * ndof_per_node, )
         """
+        rhs[:] = 0.0
         for n in range(self.quadrature.get_nquads()):
             np.add.at(rhs[:], self.conn_dof[:, n], rhs_e[:, n])
         return
@@ -614,7 +615,7 @@ class LinearPoisson(ModelBase):
     The 2- or 3-dimensional Poisson equation
 
     Equation:
-    -∆u = g in Ω
+    -k∆u = g in Ω
 
     Boundary condition:
     u = u0 on ∂Ω
@@ -633,6 +634,8 @@ class LinearPoisson(ModelBase):
         quadrature: QuadratureBase,
         basis: BasisBase,
         gfunc: Callable,
+        kappa0=1.0,
+        p=0.0,
     ):
         """
         Inputs:
@@ -641,6 +644,8 @@ class LinearPoisson(ModelBase):
                    x[..., 1] = yvals
                    x[..., 2] = zvals if is 3D problem
                    vals.shape == x[..., 0].shape
+            kappa0: the thermal conductivity of the material
+            p: RAMP penalization (for topology optimization)
         """
         ndof_per_node = 1
         super().__init__(
@@ -648,6 +653,23 @@ class LinearPoisson(ModelBase):
         )
         self.gfunc = gfunc
         self.fun_vals = None
+        self.kappa0 = kappa0
+        self.p = p
+
+        # Allocate memory
+        self.rho_e = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.rho_q = np.zeros((self.nelems, self.nquads))
+        self.kappa_q = np.zeros((self.nelems, self.nquads))
+        self.kappa_q_deriv = np.zeros((self.nelems, self.nquads, self.nnodes_per_elem))
+        self.inner = np.zeros((self.nelems, self.nnodes_per_elem))
+        self.Ke_deriv = np.zeros(
+            (
+                self.nelems,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem * self.ndof_per_node,
+                self.nnodes_per_elem,
+            )
+        )
         return
 
     @time_this
@@ -660,7 +682,7 @@ class LinearPoisson(ModelBase):
         return self.rhs
 
     @time_this
-    def compute_jacobian(self):
+    def compute_jacobian(self, rho=1.0):
         """
         Compute the element Jacobian (stiffness) matrices Ke and assemble the
         global K
@@ -668,12 +690,95 @@ class LinearPoisson(ModelBase):
         Return:
             K: (sparse) global Jacobian matrix
         """
+        # Set nodal density
+        if not hasattr(rho, "__len__"):
+            rho = np.ones(self.nnodes) * rho
+
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.Ke_mat = self.Ke_mat.astype(complex)
+
+        # Update self.kappa_q
+        self._update_material_property(rho)
+
         # Compute element Jacobian matrix -> Ke_mat
         self._compute_element_jacobian(self.Ke_mat)
 
         # Assemble global Jacobian -> K
         K = self._assemble_jacobian(self.Ke_mat)
         return K
+
+    @time_this
+    def compliance(self, rho, solver="cg"):
+        """
+        Compute the thermal compliance function given nodal density
+
+        Inputs:
+            rho: nodal (usually filtered) density
+            solver: cg or direct, note that for a complex step, direct must be
+                    used
+
+        Return:
+            c: compliance scalar
+            u: solution vector
+        """
+        assert solver == "cg" or solver == "direct"
+
+        # Construct the linear system
+        K = self.compute_jacobian(rho)
+        rhs = self.compute_rhs()
+
+        # Apply Dirichlet boundary conditions
+        K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+        # Solve the linear system
+        if solver == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if fail:
+                raise RuntimeError(f"CG failed with code {fail}")
+
+        c = rhs.dot(u)
+        return c, u
+
+    @time_this
+    def compliance_grad(self, rho, u):
+        """
+        Compute the thermal compliance function gradient w.r.t. nodal density
+        Inputs:
+            rho: nodal (usually filtered) density
+            u: solution vector
+
+        Return:
+            grad: gradient with respect to rho
+        """
+        grad = -self._compute_K_dv_sens(rho, u, u)
+        return grad
+
+    @time_this
+    def volume(self, rho):
+        """
+        Compute the normalized volume of the design
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        vol = rho.sum() / self.nnodes
+        return vol
+
+    @time_this
+    def volume_grad(self, rho):
+        """
+        Compute the gradient of the normalized volume with respect to rho
+
+        Inputs:
+            rho: nodal (usually filtered) density
+        """
+        grad = np.ones(self.nnodes) / self.nnodes
+        return grad
 
     @time_this
     def _compute_gfun(self, Xq, fun_vals):
@@ -746,8 +851,112 @@ class LinearPoisson(ModelBase):
         wq = self.quadrature.get_weight()
 
         Ke[...] = np.einsum(
-            "iq,q,iqjl,iqkl -> ijk", self.detJq, wq, self.Ngrad, self.Ngrad
+            "iq,iq,q,iqjl,iqkl -> ijk",
+            self.kappa_q,
+            self.detJq,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            optimize=True,
         )
+        return
+
+    @time_this
+    def _compute_K_dv_sens(self, rho, phi, psi):
+        """
+        Compute the sensitivity of scalar value (phi^T K psi) w.r.t. nodal
+        density rho
+        """
+        # Compute Jacobian derivatives
+        Nderiv = self.basis.eval_shape_fun_deriv()
+
+        # Compute Jacobian transformation -> Jq
+        utils.compute_jtrans(self.Xe, Nderiv, self.Jq)
+
+        # Compute Jacobian determinant -> detJq
+        utils.compute_jdet(self.Jq, self.detJq)
+
+        # Compute shape function gradient -> (invJq), Ngrad
+        utils.compute_basis_grad(self.Jq, self.detJq, Nderiv, self.invJq, self.Ngrad)
+
+        # Get quadrature weights
+        wq = self.quadrature.get_weight()
+
+        # Compute material property w.r.t. rho -> self.kappa_q_deriv
+        self._update_material_property_deriv(rho)
+
+        self.Ke_deriv[...] = np.einsum(
+            "iqo,iq,q,iqjl,iqkl -> ijko",
+            self.kappa_q_deriv,
+            self.detJq,
+            wq,
+            self.Ngrad,
+            self.Ngrad,
+            optimize=True,
+        )
+
+        # Compute the derivative of the inner product for each element
+        self.inner[...] = np.einsum(
+            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        )
+
+        # Assemble the derivative
+        dfdrho = np.zeros(self.nnodes)
+        for i in range(self.nnodes_per_elem):
+            np.add.at(dfdrho, self.conn[:, i], self.inner[:, i])
+        return dfdrho
+
+    @time_this
+    def _update_material_property(self, rho):
+        """
+        Update material property on quadrature points given nodal density. RAMP
+        penalization is used, hence the material kappa is multiplied by a factor
+        of rho / (1 + p * (1 - rho))
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.kappa_q = self.kappa_q.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density at each quadrature point
+        self.kappa_q[:] = self.rho_q / (1 + self.p * (1 - self.rho_q))
+        return
+
+    @time_this
+    def _update_material_property_deriv(self, rho):
+        """
+        Update material property on quadrature points w.r.t. nodal density. RAMP
+        penalization is used, hence the material kappa is multiplied by a factor
+        of (1 + p) / (1 + p * (1 - rho))**2
+
+        Inputs:
+            rho: nodal design variable
+        """
+        # If performing complex-step verification, cast to complex type
+        if rho.dtype == complex:
+            self.rho_e = self.rho_e.astype(complex)
+            self.rho_q = self.rho_q.astype(complex)
+            self.kappa_q_deriv = self.kappa_q_deriv.astype(complex)
+
+        # Compute density at each quadrature point
+        utils.scatter_node_to_elem(self.conn, rho, self.rho_e)
+        N = self.basis.eval_shape_fun()
+        utils.compute_elem_interp(N, self.rho_e, self.rho_q)
+
+        # Compute penalized density derivative at each quadrature point
+        ramp_rho_q_deriv = (1 + self.p) / (1 + self.p * (1 - self.rho_q)) ** 2
+
+        N = self.basis.eval_shape_fun()
+        self.kappa_q_deriv[...] = np.einsum("ql,iq -> iql", N, ramp_rho_q_deriv)
         return
 
 
@@ -1218,17 +1427,21 @@ class LinearElasticity(ModelBase):
         return K
 
     @time_this
-    def compliance(self, rho):
+    def compliance(self, rho, solver="cg"):
         """
         Compute the compliance function given nodal density
 
         Inputs:
             rho: nodal (usually filtered) density
+            solver: cg or direct, note that for a complex step, direct must be
+                    used
 
         Return:
             c: compliance scalar
             u: solution vector
         """
+        assert solver == "cg" or solver == "direct"
+
         # Construct the linear system
         K = self.compute_jacobian(rho)
         rhs = self.compute_rhs()
@@ -1237,12 +1450,14 @@ class LinearElasticity(ModelBase):
         K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
 
         # Solve the linear system
-        ml = pyamg.smoothed_aggregation_solver(K)
-        # u = ml.solve(rhs, tol=1e-8)
-        M = ml.aspreconditioner()
-        u, fail = cg(K, rhs, tol=1e-8, M=M)
-        if fail:
-            raise RuntimeError(f"CG failed with code {fail}")
+        if solver == "direct":
+            u = spsolve(K, rhs)
+        else:
+            ml = pyamg.smoothed_aggregation_solver(K)
+            M = ml.aspreconditioner()
+            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if fail:
+                raise RuntimeError(f"CG failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -1908,7 +2123,6 @@ class ProblemCreator:
         for k in range(self.nnodes_z):
             for j in range(self.nnodes_y):
                 dof_fixed.append(self.nodes3d[k, j, 0])
-                dof_fixed.append(self.nodes3d[k, j, -1])
         return self.conn, self.X, dof_fixed
 
     @time_this

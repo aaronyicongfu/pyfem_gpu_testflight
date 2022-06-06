@@ -120,13 +120,15 @@ class ElasticityDerivative(unittest.TestCase):
         p = np.random.rand(nnodes)
         h = 1e-30
 
-        c, u = model.compliance(rho)
+        c, u = model.compliance(rho, solver="cg")
         grad = model.compliance_grad(rho, u)
+        grad = p.dot(grad)
 
-        c_cs, _ = model.compliance(rho + 1j * p * h)
-        c_cs = c_cs.imag / h
-        print(f"grad:    {p.dot(grad):.15e}")
-        print(f"grad_cs: {c_cs:.15e}")
+        c_cs, _ = model.compliance(rho + 1j * p * h, solver="direct")
+        grad_cs = c_cs.imag / h
+        print(f"grad:    {grad:.15e}")
+        print(f"grad_cs: {grad_cs:.15e}")
+        self.assertAlmostEqual((grad - grad_cs) / grad, 0.0, delta=1e-10)
         return
 
     def test_2d_quad(self):
