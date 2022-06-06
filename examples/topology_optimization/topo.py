@@ -111,6 +111,7 @@ if __name__ == "__main__":
     p.add_argument(
         "--element_type", type=str, choices=["quad", "tri", "block"], default="quad"
     )
+    p.add_argument("--r0", type=float, default=0.01, help="Filter radius")
     p.add_argument("--prefix", type=str, default="results")
     p.add_argument("--timer_threshold", type=float, default=10.0)
     args = p.parse_args()
@@ -156,8 +157,7 @@ if __name__ == "__main__":
         )
 
     # Create the Helmholtz filter
-    r0 = 0.01
-    filtr = pyfem.Helmholtz(r0, X, conn, quadrature, basis)
+    filtr = pyfem.Helmholtz(args.r0, X, conn, quadrature, basis)
 
     # Create paropt problem
     prob = TopoProblem(
@@ -180,6 +180,9 @@ if __name__ == "__main__":
     opt.optimize()
     x, z, zw, zl, zu = opt.getOptimizedPoint()
     rho = filtr.apply(x)
-    utils.to_vtk(
-        conn, X, {"x": x, "rho": rho}, vtk_name=join(args.prefix, "result.vtk")
-    )
+    nodal_vals = {"x": x, "rho": rho}
+    if args.problem == "thermal":
+        c, u = model.compliance(rho)
+        nodal_vals["T"] = u
+
+    utils.to_vtk(conn, X, nodal_vals, vtk_name=join(args.prefix, "result.vtk"))
