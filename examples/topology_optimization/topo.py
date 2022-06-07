@@ -32,7 +32,12 @@ class TopoProblem(ParOpt.Problem):
         self.save_history_every = save_history_every
         self.prefix = prefix
 
-        self.fig, self.ax = plt.subplots(constrained_layout=True)
+        X = self.model.X
+        lx = X[:, 0].max() - X[:, 0].min()
+        ly = X[:, 1].max() - X[:, 1].min()
+        self.fig, self.ax = plt.subplots(
+            figsize=(4.8 * lx / ly, 4.8), constrained_layout=True
+        )
         self.counter = 0
         return
 
@@ -49,7 +54,7 @@ class TopoProblem(ParOpt.Problem):
         # Save the design
         if self.save_history and self.counter % self.save_history_every == 0:
             self.plot(rho, self.ax)
-            self.fig.savefig(join(self.prefix, f"design_{self.counter:d}.png"))
+            self.fig.savefig(join(self.prefix, f"design_{self.counter:d}.pdf"))
         self.counter += 1
 
         # Evaluate compliance
@@ -73,6 +78,10 @@ class TopoProblem(ParOpt.Problem):
         """
         Create a plot
         """
+        # Clear old figure
+        ax.clear()
+        ax.axis("off")
+
         nnodes_per_elem = self.model.nnodes_per_elem
         nelems = self.model.nelems
         X = self.model.X
@@ -98,7 +107,7 @@ class TopoProblem(ParOpt.Problem):
         ax.set_aspect("equal")
 
         # Create the contour plot
-        ax.tricontourf(tri_obj, u, **kwargs)
+        ax.tricontourf(tri_obj, u, cmap="bwr", alpha=0.8, **kwargs)
         return
 
 
@@ -175,14 +184,20 @@ if __name__ == "__main__":
     # Set up the optimizer
     opt = ParOpt.Optimizer(prob, options)
 
-    # Set a new starting point
     prob.checkGradients()
     opt.optimize()
     x, z, zw, zl, zu = opt.getOptimizedPoint()
     rho = filtr.apply(x)
+
+    # Plot optimal design
+    prob.plot(x, prob.ax)
+    prob.fig.savefig(join(args.prefix, "opt_design_x.pdf"))
+    prob.plot(rho, prob.ax)
+    prob.fig.savefig(join(args.prefix, "opt_design_rho.pdf"))
+
+    # Save design to vtk
     nodal_vals = {"x": x, "rho": rho}
     if args.problem == "thermal":
         c, u = model.compliance(rho)
         nodal_vals["T"] = u
-
     utils.to_vtk(conn, X, nodal_vals, vtk_name=join(args.prefix, "result.vtk"))
