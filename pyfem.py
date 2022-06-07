@@ -2051,6 +2051,16 @@ class Assembler:
         return
 
     @time_this
+    def _setup_amg(self, K):
+        """
+        Get the AMG preconditioner ready
+        """
+        ml = pyamg.smoothed_aggregation_solver(K)
+        print(ml)
+        M = ml.aspreconditioner()
+        return M
+
+    @time_this
     def _solve_linear_system(self, K, rhs, method):
         """
         Solve the linear system
@@ -2064,8 +2074,7 @@ class Assembler:
         if method == "direct":
             u = spsolve(K, rhs)
         else:
-            ml = pyamg.smoothed_aggregation_solver(K)
-            M = ml.aspreconditioner()
+            M = self._setup_amg(K)
             if method == "cg":
                 u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
             else:
