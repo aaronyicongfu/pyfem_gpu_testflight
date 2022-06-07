@@ -1802,7 +1802,7 @@ class Helmholtz(ModelBase):
         Evaluate element-wise Jacobian matrices and rhs, where
 
 
-            Ke = ∑ detJq wq [r**2 (NxNxT + NyNyT) + NNT]_q
+            Ke = ∑ detJq wq [r**2 (NxNxT + NyNyT + ...) + NNT]_q
                  q
 
             Re = [∑ detJq wq (NNT)_q]
@@ -1855,10 +1855,19 @@ class A2DWrapper(ModelBase):
                               'E': E,
                               'nu': nu
                           }
+
                           or
+
                           problem_info = {
                               'type': 'helmholtz',
                               'r0': r0
+                          }
+
+                          or
+
+                          problem_info = {
+                              'type': 'poisson',
+                              'kappa0': kappa0
                           }
 
         """
@@ -1870,6 +1879,8 @@ class A2DWrapper(ModelBase):
             a2dmodel = a2d.Elasticity(nelems, nnodes)
         elif problem_info["type"] == "helmholtz":
             a2dmodel = a2d.Helmholtz(nelems, nnodes)
+        elif problem_info["type"] == "poisson":
+            a2dmodel = a2d.Poisson(nelems, nnodes)
         else:
             raise ValueError(f"Unknown problem_info {problem_info}")
 
@@ -1893,6 +1904,8 @@ class A2DWrapper(ModelBase):
             self.data[:, :, 1] = lam  # Lame parameter: lambda
         elif problem_info["type"] == "helmholtz":
             self.data[:] = problem_info["r0"]
+        elif problem_info["type"] == "poisson":
+            self.data[:] = problem_info["kappa0"]
 
         # Set solution numpy array and update underlying c++ data
         self.U = np.array(a2dmodel.get_solution(), copy=False)

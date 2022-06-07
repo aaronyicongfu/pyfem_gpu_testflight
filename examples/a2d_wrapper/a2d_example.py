@@ -13,7 +13,7 @@ import example as a2d
 utils.timer_on()
 
 # Set up mesh
-creator = pyfem.ProblemCreator(64, 32, 32, element_type="block")
+creator = pyfem.ProblemCreator(8, 8, 8, element_type="block")
 conn, X, dof_fixed, nodal_force = creator.create_linear_elasticity_problem()
 
 """
@@ -32,7 +32,7 @@ model = pyfem.LinearElasticity(X, conn, dof_fixed, None, nodal_force, quadrature
 K = model.compute_jacobian()
 
 # Check difference
-diff = np.max(K - K_a2d) / np.max(K)
+diff = np.max(np.abs(K - K_a2d)) / np.max(K)
 print(f"(K - K_a2d) / K = {diff:.10e}")
 
 """
@@ -52,5 +52,27 @@ model = pyfem.Helmholtz(r0, X, conn, quadrature, basis)
 K = model.compute_jacobian()
 
 # Check difference
-diff = np.max(K - K_a2d) / np.max(K)
+diff = np.max(np.abs(K - K_a2d)) / np.max(K)
+print(f"(K - K_a2d) / K = {diff:.10e}")
+
+"""
+Poisson problem
+"""
+
+# Compute element-wise Jacobian using a2d
+kappa0 = 1.0
+problem_info = {"type": "poisson", "kappa0": kappa0}
+model_a2d = pyfem.A2DWrapper(X, conn, dof_fixed, None, a2d, problem_info)
+K_a2d = model_a2d.compute_jacobian()
+
+# Compute element-wise Jacobian using pyfem
+quadrature = pyfem.QuadratureBlock3D()
+basis = pyfem.BasisBlock3D(quadrature)
+model = pyfem.LinearPoisson(
+    X, conn, dof_fixed, None, quadrature, basis, lambda x: 1.0, kappa0=kappa0
+)
+K = model.compute_jacobian()
+
+# Check difference
+diff = np.max(np.abs(K - K_a2d)) / np.max(K)
 print(f"(K - K_a2d) / K = {diff:.10e}")

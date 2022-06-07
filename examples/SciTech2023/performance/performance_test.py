@@ -36,15 +36,23 @@ def run_assemble_case(nx, ny, nz, problem):
         )
         problem_info = {"type": "elasticity", "E": 10.0, "nu": 0.3}
         a2dmodel = pyfem.A2DWrapper(X, conn, dof_fixed, None, a2d, problem_info)
-    else:
+    elif problem == "helmholtz":
         conn, X, x = creator.create_helmhotz_problem()
         r0 = 0.05
         model = pyfem.Helmholtz(r0, X, conn, quadrature, basis)
         problem_info = {"type": "helmholtz", "r0": r0}
         a2dmodel = pyfem.A2DWrapper(X, conn, [], None, a2d, problem_info)
+    elif problem == "poisson":
+        conn, X, dof_fixed = creator.create_poisson_problem()
+        kappa0 = 1.0
+        model = pyfem.LinearPoisson(
+            X, conn, dof_fixed, None, quadrature, basis, lambda x: 1.0, kappa0
+        )
+        problem_info = {"type": "poisson", "kappa0": kappa0}
+        a2dmodel = pyfem.A2DWrapper(X, conn, [], None, a2d, problem_info)
 
     # Assemble element jacobian with pyfem
-    if problem == "elasticity":
+    if problem == "elasticity" or problem == "poisson":
         model._compute_element_jacobian(model.Ke_mat)
 
     # Assemble element jacobian with a2d
@@ -59,7 +67,7 @@ def run_assemble_case(nx, ny, nz, problem):
 if __name__ == "__main__":
     p = argparse.ArgumentParser()
     p.add_argument(
-        "--problem", default="helmholtz", choices=["elasticity", "helmholtz"]
+        "--problem", default="helmholtz", choices=["elasticity", "helmholtz", "poisson"]
     )
     args = p.parse_args()
 
@@ -78,9 +86,6 @@ if __name__ == "__main__":
         _ndof = run_assemble_case(_nx, _ny, _nz, args.problem)
         ndof.append(_ndof)
 
-    pprint(utils.MyProfiler.saved_times)
-    print(len(utils.MyProfiler.saved_times))
-
     mpl_style_path = os.path.join(
         os.path.dirname(os.path.realpath(__file__)), "..", "aiaa.mplstyle"
     )
@@ -95,8 +100,12 @@ if __name__ == "__main__":
         pyfem_time = utils.MyProfiler.saved_times[
             "LinearElasticity._einsum_element_jacobian"
         ]
-    else:
+    elif args.problem == "helmholtz":
         pyfem_time = utils.MyProfiler.saved_times["Helmholtz._einsum_element_jacobian"]
+    elif args.problem == "poisson":
+        pyfem_time = utils.MyProfiler.saved_times[
+            "LinearPoisson._einsum_element_jacobian"
+        ]
 
     ax.loglog(
         ndof,
