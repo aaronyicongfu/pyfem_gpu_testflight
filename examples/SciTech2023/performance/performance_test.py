@@ -1,13 +1,9 @@
-from re import A
 import sys
 import argparse
-
-from matplotlib import markers
 
 sys.path.append("../../..")
 import pyfem
 import utils
-from pprint import pprint
 
 sys.path.append("../../../../a2d/examples/elasticity")
 import example as a2d
@@ -69,18 +65,21 @@ if __name__ == "__main__":
     p.add_argument(
         "--problem", default="helmholtz", choices=["elasticity", "helmholtz", "poisson"]
     )
+    p.add_argument("--test", action="store_true")
     args = p.parse_args()
 
     # Switch on timer
     utils.timer_on()
     utils.timer_set_threshold(0.0)
 
-    nx = [32, 48, 64, 80]
-    ny = [32, 48, 64, 80]
-    nz = [32, 48, 64, 80]
-    # nx = [2, 3, 4, 6]
-    # ny = [2, 3, 4, 6]
-    # nz = [2, 3, 4, 6]
+    if args.test:
+        nx = [2, 3, 4, 6]
+        ny = [2, 3, 4, 6]
+        nz = [2, 3, 4, 6]
+    else:
+        nx = [32, 48, 64, 80]
+        ny = [32, 48, 64, 80]
+        nz = [32, 48, 64, 80]
     ndof = []
     for _nx, _ny, _nz in zip(nx, ny, nz):
         _ndof = run_assemble_case(_nx, _ny, _nz, args.problem)
@@ -91,8 +90,14 @@ if __name__ == "__main__":
     )
     plt.style.use(mpl_style_path)
 
+    textwidth = 6.5  # in
+    figwidth = textwidth / 2.5
+    figheight = figwidth * 0.75
     fig, ax = plt.subplots(
-        ncols=1, nrows=1, figsize=(3.3, 2.5), constrained_layout=True
+        ncols=1,
+        nrows=1,
+        figsize=(figwidth, figheight),
+        constrained_layout=True,
     )
 
     a2d_time = utils.MyProfiler.saved_times["A2DWrapper._compute_jacobian_tensor"]
@@ -131,8 +136,8 @@ if __name__ == "__main__":
     )
 
     ax.legend()
-    ax.set_xlabel("problem size (number of degrees of freedom)")
-    ax.set_ylabel("Execution time (ms)")
+    ax.set_xlabel("Problem size")
+    ax.set_ylabel("Elapsed time (ms)")
     ax.grid(which="major")
 
     fig.savefig(f"Ke_time_{args.problem}.pdf")

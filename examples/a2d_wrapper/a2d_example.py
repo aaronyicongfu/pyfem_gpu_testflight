@@ -32,7 +32,7 @@ model = pyfem.LinearElasticity(X, conn, dof_fixed, None, nodal_force, quadrature
 K = model.compute_jacobian()
 
 # Check difference
-diff = np.max(np.abs(K - K_a2d)) / np.max(K)
+diff = np.max(np.abs(K - K_a2d)) / np.max(np.abs(K))
 print(f"(K - K_a2d) / K = {diff:.10e}")
 
 """
@@ -52,7 +52,7 @@ model = pyfem.Helmholtz(r0, X, conn, quadrature, basis)
 K = model.compute_jacobian()
 
 # Check difference
-diff = np.max(np.abs(K - K_a2d)) / np.max(K)
+diff = np.max(np.abs(K - K_a2d)) / np.max(np.abs(K))
 print(f"(K - K_a2d) / K = {diff:.10e}")
 
 """
@@ -74,5 +74,5 @@ model = pyfem.LinearPoisson(
 K = model.compute_jacobian()
 
 # Check difference
-diff = np.max(np.abs(K - K_a2d)) / np.max(K)
+diff = np.max(np.abs(K - K_a2d)) / np.max(np.abs(K))
 print(f"(K - K_a2d) / K = {diff:.10e}")
