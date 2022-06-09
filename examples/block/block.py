@@ -17,10 +17,12 @@ p.add_argument("--nz", type=int, default=16)
 p.add_argument(
     "--assemble_only", action="store_true", help="assemble the matrix and exit"
 )
+p.add_argument("--threshold", type=float, default=100.0)
+p.add_argument("--solver", default="cg", choices=["direct", "cg", "gmres"])
 args = p.parse_args()
 
-# Switch on timer
 utils.timer_on()
+utils.timer_set_threshold(args.threshold)
 
 # Set up the meshing utility and create the problem mesh
 creator = pyfem.ProblemCreator(args.nx, args.ny, args.nz, element_type="block")
@@ -43,7 +45,7 @@ else:
     assembler = pyfem.Assembler(model)
 
     # Solve the linear system and extract directional nodal displacements
-    u = assembler.solve(method="gmres")
+    u = assembler.solve(method=args.solver)
 
     ux = u[0::3]
     uy = u[1::3]

@@ -714,14 +714,14 @@ class LinearPoisson(ModelBase):
 
         Inputs:
             rho: nodal (usually filtered) density
-            solver: cg or direct, note that for a complex step, direct must be
-                    used
+            solver: direct, cg or gmres, note that for a complex step, direct
+                    must be used
 
         Return:
             c: compliance scalar
             u: solution vector
         """
-        assert solver == "cg" or solver == "direct"
+        assert solver == "direct" or solver == "cg" or solver == "gmres"
 
         # Construct the linear system
         K = self.compute_jacobian(rho)
@@ -736,9 +736,12 @@ class LinearPoisson(ModelBase):
         else:
             ml = pyamg.smoothed_aggregation_solver(K)
             M = ml.aspreconditioner()
-            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if solver == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"CG failed with code {fail}")
+                raise RuntimeError(f"{solver} failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -785,6 +788,13 @@ class LinearPoisson(ModelBase):
         return
 
     @time_this
+    def _einsum_element_rhs(self, detJq, wq, N, fun_vals, rhs_e):
+        rhs_e[...] = np.einsum(
+            "ik,k,jk,ik -> ij", detJq, wq, N, fun_vals, optimize=True
+        )
+        return
+
+    @time_this
     def _compute_element_rhs(self, rhs_e):
         """
         Evaluate element-wise rhs vectors:
@@ -819,7 +829,20 @@ class LinearPoisson(ModelBase):
         wq = self.quadrature.get_weight()
 
         # Compute element rhs
-        rhs_e[...] = np.einsum("ik,k,jk,ik -> ij", self.detJq, wq, N, self.fun_vals)
+        self._einsum_element_rhs(self.detJq, wq, N, self.fun_vals, rhs_e)
+        return
+
+    @time_this
+    def _einsum_element_jacobian(self, kappa_q, detJq, wq, Ngrad, Ke):
+        Ke[...] = np.einsum(
+            "iq,iq,q,iqjl,iqkl -> ijk",
+            kappa_q,
+            detJq,
+            wq,
+            Ngrad,
+            Ngrad,
+            optimize=True,
+        )
         return
 
     @time_this
@@ -849,14 +872,27 @@ class LinearPoisson(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        Ke[...] = np.einsum(
-            "iq,iq,q,iqjl,iqkl -> ijk",
-            self.kappa_q,
-            self.detJq,
+        self._einsum_element_jacobian(self.kappa_q, self.detJq, wq, self.Ngrad, Ke)
+
+        return
+
+    @time_this
+    def _einsum_element_sens(self, kappa_q_deriv, detJq, wq, Ngrad, Ke_deriv):
+        Ke_deriv[...] = np.einsum(
+            "iqo,iq,q,iqjl,iqkl -> ijko",
+            kappa_q_deriv,
+            detJq,
             wq,
-            self.Ngrad,
-            self.Ngrad,
+            Ngrad,
+            Ngrad,
             optimize=True,
+        )
+        return
+
+    @time_this
+    def _einsum_element_sens_inner(self, conn_dof, phi, psi, Ke_deriv, inner):
+        inner[...] = np.einsum(
+            "ij,ik,ijko -> io", phi[conn_dof], psi[conn_dof], Ke_deriv
         )
         return
 
@@ -884,19 +920,13 @@ class LinearPoisson(ModelBase):
         # Compute material property w.r.t. rho -> self.kappa_q_deriv
         self._update_material_property_deriv(rho)
 
-        self.Ke_deriv[...] = np.einsum(
-            "iqo,iq,q,iqjl,iqkl -> ijko",
-            self.kappa_q_deriv,
-            self.detJq,
-            wq,
-            self.Ngrad,
-            self.Ngrad,
-            optimize=True,
+        self._einsum_element_sens(
+            self.kappa_q_deriv, self.detJq, wq, self.Ngrad, self.Ke_deriv
         )
 
         # Compute the derivative of the inner product for each element
-        self.inner[...] = np.einsum(
-            "ij,ik,ijko -> io", phi[self.conn_dof], psi[self.conn_dof], self.Ke_deriv
+        self._einsum_element_sens_inner(
+            self.conn_dof, phi, psi, self.Ke_deriv, self.inner
         )
 
         # Assemble the derivative
@@ -1432,14 +1462,14 @@ class LinearElasticity(ModelBase):
 
         Inputs:
             rho: nodal (usually filtered) density
-            solver: cg or direct, note that for a complex step, direct must be
-                    used
+            solver: direct, cg or gmres, note that for a complex step, direct
+                    must be used
 
         Return:
             c: compliance scalar
             u: solution vector
         """
-        assert solver == "cg" or solver == "direct"
+        assert solver == "direct" or solver == "cg" or solver == "gmres"
 
         # Construct the linear system
         K = self.compute_jacobian(rho)
@@ -1454,9 +1484,12 @@ class LinearElasticity(ModelBase):
         else:
             ml = pyamg.smoothed_aggregation_solver(K)
             M = ml.aspreconditioner()
-            u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            if solver == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"CG failed with code {fail}")
+                raise RuntimeError(f"{solver} failed with code {fail}")
 
         c = rhs.dot(u)
         return c, u
@@ -1641,6 +1674,20 @@ class LinearElasticity(ModelBase):
         return
 
     @time_this
+    def _einsum_element_jacobian(self, detJq, wq, Be, Cq, C0, Ke):
+        Ke[...] = np.einsum(
+            "iq,q,iqnj,iq,nm,iqmk->ijk",
+            detJq,
+            wq,
+            Be,
+            Cq,
+            C0,
+            Be,
+            optimize=True,
+        )
+        return
+
+    @time_this
     def _compute_element_jacobian(self, Ke):
         """
         Evaluate element-wise stiffness matrix Ke
@@ -1678,16 +1725,7 @@ class LinearElasticity(ModelBase):
         # Get quadrature weights
         wq = self.quadrature.get_weight()
 
-        Ke[...] = np.einsum(
-            "iq,q,iqnj,iq,nm,iqmk->ijk",
-            self.detJq,
-            wq,
-            self.Be,
-            self.Cq,
-            self.C0,
-            self.Be,
-            optimize=True,
-        )
+        self._einsum_element_jacobian(self.detJq, wq, self.Be, self.Cq, self.C0, Ke)
         return
 
 
@@ -1718,7 +1756,6 @@ class Helmholtz(ModelBase):
         self.R = self._assemble_jacobian(self.Re)
         self.RT = self.R.transpose()
         self.K = self._assemble_jacobian(self.Ke_mat)
-        # self.Ksolve = sparse.linalg.factorized(self.K.tocsc())
         self.Ksolve = pyamg.ruge_stuben_solver(self.K)
         return
 
@@ -1748,12 +1785,24 @@ class Helmholtz(ModelBase):
         return self.K
 
     @time_this
+    def _einsum_element_jacobian(self, detJq, r0, wq, Ngrad, Ke):
+        Ke[...] = np.einsum(
+            "iq,q,iqjl,iqkl -> ijk", detJq * r0**2, wq, Ngrad, Ngrad, optimize=True
+        )
+        return
+
+    @time_this
+    def _einsum_element_rhs(self, detJq, wq, N, Re):
+        Re[...] = np.einsum("iq,q,qj,qk -> ijk", detJq, wq, N, N, optimize=True)
+        return
+
+    @time_this
     def _compute_element_jacobian_and_rhs(self, Ke, Re):
         """
         Evaluate element-wise Jacobian matrices and rhs, where
 
 
-            Ke = ∑ detJq wq [r**2 (NxNxT + NyNyT) + NNT]_q
+            Ke = ∑ detJq wq [r**2 (NxNxT + NyNyT + ...) + NNT]_q
                  q
 
             Re = [∑ detJq wq (NNT)_q]
@@ -1783,18 +1832,9 @@ class Helmholtz(ModelBase):
         # Get shape functions
         N = self.basis.eval_shape_fun()
 
-        Re[...] = np.einsum("iq,q,qj,qk -> ijk", self.detJq, wq, N, N)
-
-        Ke[...] = np.einsum(
-            "iq,q,iqjl,iqkl -> ijk",
-            self.detJq * self.r0**2,
-            wq,
-            self.Ngrad,
-            self.Ngrad,
-        )
-
+        self._einsum_element_rhs(self.detJq, wq, N, Re)
+        self._einsum_element_jacobian(self.detJq, self.r0, wq, self.Ngrad, Ke)
         Ke[...] += Re[...]
-
         return
 
 
@@ -1815,10 +1855,19 @@ class A2DWrapper(ModelBase):
                               'E': E,
                               'nu': nu
                           }
+
                           or
+
                           problem_info = {
                               'type': 'helmholtz',
                               'r0': r0
+                          }
+
+                          or
+
+                          problem_info = {
+                              'type': 'poisson',
+                              'kappa0': kappa0
                           }
 
         """
@@ -1830,6 +1879,8 @@ class A2DWrapper(ModelBase):
             a2dmodel = a2d.Elasticity(nelems, nnodes)
         elif problem_info["type"] == "helmholtz":
             a2dmodel = a2d.Helmholtz(nelems, nnodes)
+        elif problem_info["type"] == "poisson":
+            a2dmodel = a2d.Poisson(nelems, nnodes)
         else:
             raise ValueError(f"Unknown problem_info {problem_info}")
 
@@ -1853,6 +1904,8 @@ class A2DWrapper(ModelBase):
             self.data[:, :, 1] = lam  # Lame parameter: lambda
         elif problem_info["type"] == "helmholtz":
             self.data[:] = problem_info["r0"]
+        elif problem_info["type"] == "poisson":
+            self.data[:] = problem_info["kappa0"]
 
         # Set solution numpy array and update underlying c++ data
         self.U = np.array(a2dmodel.get_solution(), copy=False)
@@ -1907,7 +1960,12 @@ class Assembler:
     def solve(self, method="gmres"):
         """
         Perform the static analysis
+
+        Inputs:
+            method: direct, cg or gmres
         """
+        assert method == "direct" or method == "cg" or method == "gmres"
+
         # Construct the linear system
         K = self.model.compute_jacobian()
         rhs = self.model.compute_rhs()
@@ -1925,7 +1983,12 @@ class Assembler:
     ):
         """
         Perform the static analysis
+
+        Inputs:
+            method: direct, cg or gmres
         """
+        assert method == "direct" or method == "cg" or method == "gmres"
+
         # Set the initial guess as u = 0
         if u0 is None:
             u = np.zeros(self.model.nnodes)
@@ -1988,12 +2051,22 @@ class Assembler:
         return
 
     @time_this
+    def _setup_amg(self, K):
+        """
+        Get the AMG preconditioner ready
+        """
+        ml = pyamg.smoothed_aggregation_solver(K)
+        print(ml)
+        M = ml.aspreconditioner()
+        return M
+
+    @time_this
     def _solve_linear_system(self, K, rhs, method):
         """
         Solve the linear system
 
         Args:
-            method: direct or gmres
+            method: direct, cg or gmres
 
         Return:
             u: solution
@@ -2001,11 +2074,13 @@ class Assembler:
         if method == "direct":
             u = spsolve(K, rhs)
         else:
-            ml = pyamg.smoothed_aggregation_solver(K)
-            M = ml.aspreconditioner()
-            u, fail = gmres(K, rhs, M=M)
+            M = self._setup_amg(K)
+            if method == "cg":
+                u, fail = cg(K, rhs, tol=1e-8, M=M, atol=0.0)
+            else:
+                u, fail = gmres(K, rhs, tol=1e-8, M=M, atol=0.0)
             if fail:
-                raise RuntimeError(f"GMRES failed with code {fail}")
+                raise RuntimeError(f"{method} failed with code {fail}")
         return u
 
 
