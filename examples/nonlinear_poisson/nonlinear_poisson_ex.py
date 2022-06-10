@@ -1,6 +1,8 @@
 import numpy as np
 import sys
 import matplotlib.pylab as plt
+
+sys.path.append("../..")
 import pyfem
 
 
@@ -8,14 +10,14 @@ def nonlinear_poisson():
     
     # create a structure
     creator = pyfem.ProblemCreator(nnodes_x=32, nnodes_y=32)
-    nodes, conn, X, dof_fixed = creator.create_poisson_problem()
+    conn, X, dof_fixed = creator.create_poisson_problem()
     x = np.ones(10) / 10
 
     """ Compute u """
     quadrature = pyfem.QuadratureBilinear2D()
     basis = pyfem.BasisBilinear2D(quadrature)
     model = pyfem.NonlinearPoisson2D(
-        nodes, X, conn, dof_fixed, None, quadrature, basis
+        X, conn, dof_fixed, None, quadrature, basis
     )
     assembler = pyfem.Assembler(model)
 
