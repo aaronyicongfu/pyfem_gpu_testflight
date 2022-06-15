@@ -8,8 +8,13 @@ import pyfem
 
 class ElasticityDerivative(unittest.TestCase):
     def setUp(self):
-        self.creator_3d_tetra = pyfem.ProblemCreator(
-            nnodes_x=3, nnodes_y=3, nnodes_z=3, element_type="tet"
+        # number of nodes for each dimension has to be odd
+        self.creator_tet10 = pyfem.ProblemCreator(
+            nnodes_x=9, nnodes_y=9, nnodes_z=9, element_type="tet"
+        )
+        # number of nodes for each dimension has to be odd
+        self.creator_brick20 = pyfem.ProblemCreator(
+            nnodes_x=9, nnodes_y=9, nnodes_z=9, element_type="brick20"
         )
         return
 
@@ -51,10 +56,16 @@ class ElasticityDerivative(unittest.TestCase):
         self.assertAlmostEqual((dfdrho - dfdrho_cs) / dfdrho, 0.0, delta=1e-12)
         return
 
-    def test_3d_block_tetrahedron(self):
-        quadrature = pyfem.QuadratureTetrahedron8Point()
+    def test_tetrahedron(self):
+        quadrature = pyfem.QuadratureTetrahedron5Point()
         basis = pyfem.BasisTetrahedron10node(quadrature)
-        self.run_dKdx(self.creator_3d_tetra, quadrature, basis)
+        self.run_dKdx(self.creator_tet10, quadrature, basis)
+        return
+
+    def test_Brick20Nodes(self):
+        quadrature = pyfem.QuadratureBrick333Point()
+        basis = pyfem.BasisBrick20Nodes(quadrature)
+        self.run_dKdx(self.creator_brick20, quadrature, basis)
         return
 
 

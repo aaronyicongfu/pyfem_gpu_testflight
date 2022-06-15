@@ -354,6 +354,11 @@ def to_vtk(conn, X, nodal_sol={}, vtk_name="problem.vtk"):
             "vtk_type": 24,
             "note": "Ten-node tetrahedral element",
         },
+        "brick20": {
+            "nnode": 20,
+            "vtk_type": 12,
+            "note": "20-node brick element",
+        }
     }
 
     if isinstance(conn, np.ndarray):
@@ -365,6 +370,8 @@ def to_vtk(conn, X, nodal_sol={}, vtk_name="problem.vtk"):
             conn = {"block": conn}
         elif conn.shape[1] == 10:
             conn = {"tet": conn}
+        elif conn.shape[1] == 20:
+            conn = {"brick20": conn}
 
     # vtk requires a 3-dimensional data point
     if X.shape[1] == 2:
