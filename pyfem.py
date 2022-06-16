@@ -106,6 +106,66 @@ class QuadratureBlock3D(QuadratureBase):
         return
 
 
+class QuadratureTetrahedron5Point(QuadratureBase):
+    """
+    The following is 8-point Gauss integration rules for tetrahedron
+    ref: https://help.febio.org/FEBio/FEBio_tm_2_7/FEBio_tm_2-7-Subsection-4.1.4.html
+    """
+
+    @time_this
+    def __init__(self):
+        pts = np.array(
+            [
+                [1 / 4, 1 / 4, 1 / 4],
+                [1 / 2, 1 / 6, 1 / 6],
+                [1 / 6, 1 / 2, 1 / 6],
+                [1 / 6, 1 / 6, 1 / 2],
+                [1 / 6, 1 / 6, 1 / 6],
+            ]
+        )
+        weights = np.array([-4 / 5, 9 / 20, 9 / 20, 9 / 20, 9 / 20])
+        super().__init__(pts, weights)
+        return
+
+
+class QuadratureBrick333Point(QuadratureBase):
+    """
+    The following is 333-point Gauss integration rules for brick
+    ref: Unified Isoparametric 3D LagrangeFinite Elements
+    """
+
+    @time_this
+    def __init__(self):
+        n_pts = 3 * 3 * 3
+        pts = np.zeros((n_pts, 3))
+        weights = np.zeros(n_pts)
+
+        for k in range(-1, 2):
+            for j in range(-1, 2):
+                for i in range(-1, 2):
+                    pts_idx = (i + 1) + (j + 1) * 3 + (k + 1) * 9
+                    pts[pts_idx, 0] = i * np.sqrt(3.0 / 5.0)
+                    pts[pts_idx, 1] = j * np.sqrt(3.0 / 5.0)
+                    pts[pts_idx, 2] = k * np.sqrt(3.0 / 5.0)
+
+        corner_nodes = [1, 3, 7, 9, 19, 21, 25, 27]
+        mid_edge_nodes = [2, 4, 6, 8, 10, 12, 16, 18, 20, 22, 24, 26]
+        mid_face_nodes = [5, 11, 13, 15, 17, 23]
+        center_nodes = [14]
+
+        for i in corner_nodes:
+            weights[i - 1] = 0.1714677641
+        for i in mid_edge_nodes:
+            weights[i - 1] = 0.2743484225
+        for i in mid_face_nodes:
+            weights[i - 1] = 0.4389574760
+        for i in center_nodes:
+            weights[i - 1] = 0.7023319616
+
+        super().__init__(pts, weights)
+        return
+
+
 class BasisBase(ABC):
     """
     Abstract class for the element basis function
@@ -311,6 +371,260 @@ class BasisTriangle2D(BasisBase):
         return shape_derivs
 
 
+class BasisTetrahedron10node(BasisBase):
+    """
+    This is a 10-node quadratic tetrahedral element.
+    It has four corner nodes and six nodes located at the midpoint of the edges.
+    """
+
+    @time_this
+    def __init__(self, quadrature: QuadratureBase):
+        ndims = 3
+        nnodes_per_elem = 10
+        super().__init__(ndims, nnodes_per_elem, quadrature)
+        return
+
+    @time_this
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+
+        # The area coordinates relate to the isoparametric coordinates as follows
+        t = np.zeros(4)
+        t[0] = 1.0 - qpt[0] - qpt[1] - qpt[2]
+        t[1] = qpt[0]
+        t[2] = qpt[1]
+        t[3] = qpt[2]
+
+        # The shape functions are given by the following polynomials
+        shape_vals = np.zeros(self.nnodes_per_elem)
+        for i in range(4):
+            shape_vals[i] = t[i] * (2.0 * t[i] - 1.0)
+
+        shape_vals[4] = 4.0 * t[0] * t[1]
+        shape_vals[5] = 4.0 * t[1] * t[2]
+        shape_vals[6] = 4.0 * t[2] * t[0]
+        shape_vals[7] = 4.0 * t[0] * t[3]
+        shape_vals[8] = 4.0 * t[1] * t[3]
+        shape_vals[9] = 4.0 * t[2] * t[3]
+        return shape_vals
+
+    @time_this
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+
+        # The area coordinates relate to the isoparametric coordinates as follows
+        t = np.zeros(4)
+        t[0] = 1.0 - qpt[0] - qpt[1] - qpt[2]
+        t[1] = qpt[0]
+        t[2] = qpt[1]
+        t[3] = qpt[2]
+
+        dtdp = np.zeros((4, 3))
+        dtdp[0, :] = -1.0
+        dtdp[1, 0] = 1.0
+        dtdp[2, 1] = 1.0
+        dtdp[3, 2] = 1.0
+
+        # The derivtive of shape functions are given by the following polynomials
+        shape_derivs = np.zeros((self.nnodes_per_elem, 3))
+        for i in range(4):
+            for j in range(3):
+                shape_derivs[i, j] = (4.0 * t[i] - 1.0) * dtdp[i, j]
+
+        for j in range(3):
+            shape_derivs[4, j] = 4.0 * (t[0] * dtdp[1, j] + t[1] * dtdp[0, j])
+            shape_derivs[5, j] = 4.0 * (t[1] * dtdp[2, j] + t[2] * dtdp[1, j])
+            shape_derivs[6, j] = 4.0 * (t[2] * dtdp[0, j] + t[0] * dtdp[2, j])
+            shape_derivs[7, j] = 4.0 * (t[0] * dtdp[3, j] + t[3] * dtdp[0, j])
+            shape_derivs[8, j] = 4.0 * (t[1] * dtdp[3, j] + t[3] * dtdp[1, j])
+            shape_derivs[9, j] = 4.0 * (t[2] * dtdp[3, j] + t[3] * dtdp[2, j])
+        return shape_derivs.flatten()
+
+
+class BasisBrick20Nodes(BasisBase):
+    """
+    This is a 20-node quadratic brick element.
+    It has 8 corner nodes and 12 nodes located at the midpoint of the edges.
+    ref: O. C. Zienkiewicz, R. L. Taylor-The Finite Element Method, Sixth Edition, page 121
+    ref: https://web.mit.edu/calculix_v2.7/CalculiX/ccx_2.7/doc/ccx/node29.html
+    """
+
+    @time_this
+    def __init__(self, quadrature: QuadratureBase):
+        ndims = 3
+        nnodes_per_elem = 20
+        self.nodecoords = np.zeros((nnodes_per_elem, ndims))
+        #  8 corner nodes:
+        self.nodecoords[0, :] = [-1.0, -1.0, -1.0]
+        self.nodecoords[1, :] = [1.0, -1.0, -1.0]
+        self.nodecoords[2, :] = [1.0, 1.0, -1.0]
+        self.nodecoords[3, :] = [-1.0, 1.0, -1.0]
+        self.nodecoords[4, :] = [-1.0, -1.0, 1.0]
+        self.nodecoords[5, :] = [1.0, -1.0, 1.0]
+        self.nodecoords[6, :] = [1.0, 1.0, 1.0]
+        self.nodecoords[7, :] = [-1.0, 1.0, 1.0]
+        # 12 mid-edge nodes:
+        self.nodecoords[8, :] = [0.0, -1.0, -1.0]
+        self.nodecoords[9, :] = [1.0, 0.0, -1.0]
+        self.nodecoords[10, :] = [0.0, 1.0, -1.0]
+        self.nodecoords[11, :] = [-1.0, 0.0, -1.0]
+        self.nodecoords[12, :] = [0.0, -1.0, 1.0]
+        self.nodecoords[13, :] = [1.0, 0.0, 1.0]
+        self.nodecoords[14, :] = [0.0, 1.0, 1.0]
+        self.nodecoords[15, :] = [-1.0, 0.0, 1.0]
+        self.nodecoords[16, :] = [-1.0, -1.0, 0.0]
+        self.nodecoords[17, :] = [1.0, -1.0, 0.0]
+        self.nodecoords[18, :] = [1.0, 1.0, 0.0]
+        self.nodecoords[19, :] = [-1.0, 1.0, 0.0]
+        super().__init__(ndims, nnodes_per_elem, quadrature)
+        return
+
+    @time_this
+    def _eval_shape_fun_on_quad_pt(self, qpt):
+        # The area coordinates relate to the isoparametric coordinates as follows
+        shape_vals = np.zeros(self.nnodes_per_elem)
+        for i in range(8):
+            shape_vals[i] = (
+                0.125
+                * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                * (
+                    qpt[0] * self.nodecoords[i, 0]
+                    + qpt[1] * self.nodecoords[i, 1]
+                    + qpt[2] * self.nodecoords[i, 2]
+                    - 2.0
+                )
+            )
+
+        for i in range(8, self.nnodes_per_elem):
+            if self.nodecoords[i, 0] == 0.0:
+                shape_vals[i] = (
+                    0.25
+                    * (1.0 - qpt[0] ** 2)
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+
+            elif self.nodecoords[i, 1] == 0.0:
+                shape_vals[i] = (
+                    0.25
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * (1.0 - qpt[1] ** 2)
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+            elif self.nodecoords[i, 2] == 0.0:
+                shape_vals[i] = (
+                    0.25
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                    * (1.0 - qpt[2] ** 2)
+                )
+        return shape_vals
+
+    @time_this
+    def _eval_shape_deriv_on_quad_pt(self, qpt):
+        shape_derivs = np.zeros((self.nnodes_per_elem, 3))
+        for i in range(8):
+            shape_derivs[i, 0] = (
+                0.125
+                * self.nodecoords[i, 0]
+                * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                * (
+                    2 * qpt[0] * self.nodecoords[i, 0]
+                    + qpt[1] * self.nodecoords[i, 1]
+                    + qpt[2] * self.nodecoords[i, 2]
+                    - 1.0
+                )
+            )
+            shape_derivs[i, 1] = (
+                0.125
+                * self.nodecoords[i, 1]
+                * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                * (
+                    qpt[0] * self.nodecoords[i, 0]
+                    + 2 * qpt[1] * self.nodecoords[i, 1]
+                    + qpt[2] * self.nodecoords[i, 2]
+                    - 1.0
+                )
+            )
+            shape_derivs[i, 2] = (
+                0.125
+                * self.nodecoords[i, 2]
+                * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                * (
+                    qpt[0] * self.nodecoords[i, 0]
+                    + qpt[1] * self.nodecoords[i, 1]
+                    + 2 * qpt[2] * self.nodecoords[i, 2]
+                    - 1.0
+                )
+            )
+
+        for i in range(8, self.nnodes_per_elem):
+            if self.nodecoords[i, 0] == 0.0:
+                shape_derivs[i, 0] = (
+                    0.25
+                    * -2
+                    * qpt[0]
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+                shape_derivs[i, 1] = (
+                    0.25
+                    * (1.0 - qpt[0] ** 2)
+                    * self.nodecoords[i, 1]
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+                shape_derivs[i, 2] = (
+                    0.25
+                    * (1.0 - qpt[0] ** 2)
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                    * self.nodecoords[i, 2]
+                )
+            elif self.nodecoords[i, 1] == 0.0:
+                shape_derivs[i, 0] = (
+                    0.25
+                    * (1.0 - qpt[1] ** 2)
+                    * self.nodecoords[i, 0]
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+                shape_derivs[i, 1] = (
+                    0.25
+                    * -2
+                    * qpt[1]
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * (1.0 + qpt[2] * self.nodecoords[i, 2])
+                )
+                shape_derivs[i, 2] = (
+                    0.25
+                    * (1.0 - qpt[1] ** 2)
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * self.nodecoords[i, 2]
+                )
+            elif self.nodecoords[i, 2] == 0.0:
+                shape_derivs[i, 0] = (
+                    0.25
+                    * (1.0 - qpt[2] ** 2)
+                    * self.nodecoords[i, 0]
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                )
+                shape_derivs[i, 1] = (
+                    0.25
+                    * (1.0 - qpt[2] ** 2)
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * self.nodecoords[i, 1]
+                )
+                shape_derivs[i, 2] = (
+                    0.25
+                    * -2
+                    * qpt[2]
+                    * (1.0 + qpt[0] * self.nodecoords[i, 0])
+                    * (1.0 + qpt[1] * self.nodecoords[i, 1])
+                )
+        return shape_derivs
+
+
 class ModelBase(ABC):
     """
     Abstract base class for the problem model and physics
@@ -359,7 +673,9 @@ class ModelBase(ABC):
         # Sanity check: conn
         assert self.conn.min() == 0
         assert self.conn.max() == self.nnodes - 1
-        assert len(set(self.conn.flatten())) == self.nnodes
+
+        # sometimes, the length of conn is less than nnodes (i.e. brick20)
+        # assert len(set(self.conn.flatten())) == self.nnodes
 
         """
         Compute dof information
@@ -1359,7 +1675,6 @@ class LinearElasticity(ModelBase):
         """
         # Infer the problem dimensions
         ndof_per_node = X.shape[1]
-
         # Call base class's constructor
         super().__init__(
             ndof_per_node, X, conn, dof_fixed, dof_fixed_vals, quadrature, basis
@@ -2102,6 +2417,8 @@ class ProblemCreator:
                               - tri: 2d 3-node triangle
                               - quad: 2d 4-node quadrilateral
                               - block: 3d 8-node hexahedron
+                              - tet: 3d 10-node tetrahedron
+                              - brick20: 3d 20-node brick
         """
         # Set problem dimension and check inputs
         if nnodes_z is None:
@@ -2110,7 +2427,11 @@ class ProblemCreator:
             assert element_type == "quad" or element_type == "tri"
         else:
             self.ndims = 3
-            assert element_type == "block"
+            assert (
+                element_type == "block"
+                or element_type == "tet"
+                or element_type == "brick20"
+            )
 
         nnodes = nnodes_x * nnodes_y * nnodes_z
         Lx = (nnodes_x - 1) / (nnodes_y - 1)
@@ -2176,6 +2497,183 @@ class ProblemCreator:
                         conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 6] = nodes3d[k + 1, j + 1, i + 1]
                         conn[i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y, 7] = nodes3d[k + 1, j + 1, i]
                         # fmt: on
+
+        elif element_type == "tet":
+            # every 8 sub-cubes (27 nodes) can represent 6 10-node tetrahedrons
+            # MATLAB Guide to Finite Elements An Interactive Approach, page 365
+            # number of elements in each direction has to be even
+            n_tet = 6
+            nelems = temp_nelems_x * temp_nelems_y * temp_nelems_z * (n_tet / 8)
+            nnodes_per_elem = 10
+            conn = np.zeros((int(nelems), nnodes_per_elem), dtype=int)
+
+            #  element connectivity and local node indices
+            # |Element number | node0 | node1 | node2 | node3 |
+            # |---------------|-------|-------|-------|-------|
+            # |0              |(0,0,0)|(2,0,0)|(2,2,0)|(2,2,2)|
+            # |1              |(0,0,0)|(2,0,0)|(2,2,2)|(0,0,2)|
+            # |2              |(2,0,0)|(2,2,2)|(0,0,2)|(2,0,2)|
+            # |3              |(0,0,0)|(0,2,0)|(0,2,2)|(2,2,0)|
+            # |4              |(0,0,0)|(0,2,2)|(0,0,2)|(2,2,2)|
+            # |5              |(0,0,0)|(2,2,2)|(2,2,0)|(0,2,2)|
+            node_coods = np.zeros((n_tet, 4, self.ndims), dtype=int)
+            for k in range(temp_nelems_z):
+                for j in range(temp_nelems_y):
+                    for i in range(temp_nelems_x):
+                        if i % 2 == 0 and j % 2 == 0 and k % 2 == 0:
+                            quad_idx = int(
+                                i / 2
+                                + j / 2 * temp_nelems_x / 2
+                                + k / 2 * temp_nelems_x / 2 * temp_nelems_y / 2
+                            )
+                            node_coods[:, :, 0] = i
+                            node_coods[:, :, 1] = j
+                            node_coods[:, :, 2] = k
+                            for n in range(n_tet):
+                                if n == 0:
+                                    # 1st tetrahedron
+                                    node_coods[n, 1, 0] += 2
+                                    node_coods[n, 2, 0] += 2
+                                    node_coods[n, 2, 1] += 2
+                                    node_coods[n, 3, 0] += 2
+                                    node_coods[n, 3, 1] += 2
+                                    node_coods[n, 3, 2] += 2
+                                elif n == 1:
+                                    # 2nd tetrahedron
+                                    node_coods[n, 1, 0] += 2
+                                    node_coods[n, 2, 0] += 2
+                                    node_coods[n, 2, 1] += 2
+                                    node_coods[n, 2, 2] += 2
+                                    node_coods[n, 3, 2] += 2
+                                elif n == 2:
+                                    # 3rd tetrahedron
+                                    node_coods[n, 0, 0] += 2
+                                    node_coods[n, 1, 0] += 2
+                                    node_coods[n, 1, 1] += 2
+                                    node_coods[n, 1, 2] += 2
+                                    node_coods[n, 2, 2] += 2
+                                    node_coods[n, 3, 0] += 2
+                                    node_coods[n, 3, 2] += 2
+                                elif n == 3:
+                                    # 4th tetrahedron
+                                    node_coods[n, 1, 1] += 2
+                                    node_coods[n, 2, 1] += 2
+                                    node_coods[n, 2, 2] += 2
+                                    node_coods[n, 3, 0] += 2
+                                    node_coods[n, 3, 1] += 2
+                                elif n == 4:
+                                    # 5th tetrahedron
+                                    node_coods[n, 1, 1] += 2
+                                    node_coods[n, 1, 2] += 2
+                                    node_coods[n, 2, 2] += 2
+                                    node_coods[n, 3, 0] += 2
+                                    node_coods[n, 3, 1] += 2
+                                    node_coods[n, 3, 2] += 2
+                                elif n == 5:
+                                    # 6th tetrahedron
+                                    node_coods[n, 1, 0] += 2
+                                    node_coods[n, 1, 1] += 2
+                                    node_coods[n, 1, 2] += 2
+                                    node_coods[n, 2, 0] += 2
+                                    node_coods[n, 2, 1] += 2
+                                    node_coods[n, 3, 1] += 2
+                                    node_coods[n, 3, 2] += 2
+
+                                for p in range(4):
+                                    conn[n_tet * quad_idx + n, p] = nodes3d[
+                                        node_coods[n, p, 2],
+                                        node_coods[n, p, 1],
+                                        node_coods[n, p, 0],
+                                    ]
+
+                                for p in range(4, 6):
+                                    conn[n_tet * quad_idx + n, p] = nodes3d[
+                                        (
+                                            node_coods[n, p - 4, 2]
+                                            + node_coods[n, p - 3, 2]
+                                        )
+                                        // 2,
+                                        (
+                                            node_coods[n, p - 4, 1]
+                                            + node_coods[n, p - 3, 1]
+                                        )
+                                        // 2,
+                                        (
+                                            node_coods[n, p - 4, 0]
+                                            + node_coods[n, p - 3, 0]
+                                        )
+                                        // 2,
+                                    ]
+
+                                for p in range(6, 7):
+                                    conn[n_tet * quad_idx + n, p] = nodes3d[
+                                        (
+                                            node_coods[n, p - 6, 2]
+                                            + node_coods[n, p - 4, 2]
+                                        )
+                                        // 2,
+                                        (
+                                            node_coods[n, p - 6, 1]
+                                            + node_coods[n, p - 4, 1]
+                                        )
+                                        // 2,
+                                        (
+                                            node_coods[n, p - 6, 0]
+                                            + node_coods[n, p - 4, 0]
+                                        )
+                                        // 2,
+                                    ]
+
+                                for p in range(7, 10):
+                                    conn[n_tet * quad_idx + n, p] = nodes3d[
+                                        (node_coods[n, p - 7, 2] + node_coods[n, 3, 2])
+                                        // 2,
+                                        (node_coods[n, p - 7, 1] + node_coods[n, 3, 1])
+                                        // 2,
+                                        (node_coods[n, p - 7, 0] + node_coods[n, 3, 0])
+                                        // 2,
+                                    ]
+
+        elif element_type == "brick20":
+            """
+            Brick20 element
+            """
+            # number of nodes for each dimension has to be odd
+            temp_nelems_x //= 2
+            temp_nelems_y //= 2
+            temp_nelems_z //= 2
+            nelems = temp_nelems_x * temp_nelems_y * temp_nelems_z
+            nnodes_per_elem = 20
+            conn = np.zeros((nelems, nnodes_per_elem), dtype=int)
+            for k in range(temp_nelems_z):
+                for j in range(temp_nelems_y):
+                    for i in range(temp_nelems_x):
+                        n = i + j * temp_nelems_x + k * temp_nelems_x * temp_nelems_y
+
+                        conn[n, 0] = nodes3d[2 * k, 2 * j, 2 * i]
+                        conn[n, 1] = nodes3d[2 * k, 2 * j, 2 * i + 2]
+                        conn[n, 2] = nodes3d[2 * k, 2 * j + 2, 2 * i + 2]
+                        conn[n, 3] = nodes3d[2 * k, 2 * j + 2, 2 * i]
+
+                        conn[n, 4] = nodes3d[2 * k + 2, 2 * j, 2 * i]
+                        conn[n, 5] = nodes3d[2 * k + 2, 2 * j, 2 * i + 2]
+                        conn[n, 6] = nodes3d[2 * k + 2, 2 * j + 2, 2 * i + 2]
+                        conn[n, 7] = nodes3d[2 * k + 2, 2 * j + 2, 2 * i]
+
+                        conn[n, 8] = nodes3d[2 * k, 2 * j, 2 * i + 1]
+                        conn[n, 9] = nodes3d[2 * k, 2 * j + 1, 2 * i + 2]
+                        conn[n, 10] = nodes3d[2 * k, 2 * j + 2, 2 * i + 1]
+                        conn[n, 11] = nodes3d[2 * k, 2 * j + 1, 2 * i]
+
+                        conn[n, 12] = nodes3d[2 * k + 2, 2 * j, 2 * i + 1]
+                        conn[n, 13] = nodes3d[2 * k + 2, 2 * j + 1, 2 * i + 2]
+                        conn[n, 14] = nodes3d[2 * k + 2, 2 * j + 2, 2 * i + 1]
+                        conn[n, 15] = nodes3d[2 * k + 2, 2 * j + 1, 2 * i]
+
+                        conn[n, 16] = nodes3d[2 * k + 1, 2 * j, 2 * i]
+                        conn[n, 17] = nodes3d[2 * k + 1, 2 * j, 2 * i + 2]
+                        conn[n, 18] = nodes3d[2 * k + 1, 2 * j + 2, 2 * i + 2]
+                        conn[n, 19] = nodes3d[2 * k + 1, 2 * j + 2, 2 * i]
 
         else:
             raise ValueError(f"unknown element_type: {element_type}")
