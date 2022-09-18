@@ -74,6 +74,22 @@ class QuadratureTriangle2D(QuadratureBase):
         return
 
 
+class QuadratureTetra3D(QuadratureBase):
+    """
+    Linear Tetrahedral element has 3 coordinates L1, L2, L3 and 1 quadrature
+    point (L1, L2, L3) = (0.25, 0.25, 0.25)
+    """
+
+    @time_this
+    def __init__(self):
+        pts = np.array([[0.25, 0.25, 0.25]])
+        area_element_local_coord = 1.0 / 3.0
+        weights = np.array([1.0])
+        weights *= area_element_local_coord  # TODO: I think numbering order also matters here...
+        super().__init__(pts, weights)
+        return
+
+
 class QuadratureBilinear2D(QuadratureBase):
     @time_this
     def __init__(self):
@@ -2002,6 +2018,28 @@ class LinearElasticity(ModelBase):
         )
         return
 
+    def _compute_element_G(self, Ke):
+        """
+        Ge = ∫sT (d^2e/dUe^2) dS
+           = ∑ detJq wq sT (d^2e/dUe^2)
+             q
+
+        e = [ex ey gamma]
+
+        ex = ux
+        ey = vy
+        gamma = uy + vx
+
+        u_q = N * u_nodes
+        v_q = N * v_nodes
+
+        ux_q = Nx * u_nodes
+        vx_q = Nx * v_nodes
+        uy_q = Ny * u_nodes
+        vy_q = Ny * v_nodes
+        """
+        return
+
     @time_this
     def _compute_element_jacobian(self, Ke):
         """
@@ -2016,7 +2054,7 @@ class LinearElasticity(ModelBase):
         order derivatives w.r.t. u:
 
             Ke = ∑ detJq wq (BTCB)q
-                  q
+                 q
 
         Outputs:
             Ke: element-wise Jacobian matrix, (nelems, nnodes_per_elem *
