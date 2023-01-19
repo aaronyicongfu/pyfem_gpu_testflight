@@ -3,11 +3,17 @@ from scipy import sparse
 from scipy import special
 from scipy.sparse.linalg import spsolve, gmres, cg
 from abc import ABC, abstractmethod
+import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 import pyamg
 import utils
 from utils import time_this
 from typing import Callable
+
+
+def print_array(array, name):
+    for i, v in enumerate(array):
+        print(f"{name}[{i}] = {v:10.5f}")
 
 
 class QuadratureBase(ABC):
@@ -1024,7 +1030,7 @@ class LinearPoisson(ModelBase):
         return K
 
     @time_this
-    def compliance(self, rho, solver="cg"):
+    def compliance(self, rho, solver="cg", weighted=True):
         """
         Compute the thermal compliance function given nodal density
 
@@ -1032,6 +1038,7 @@ class LinearPoisson(ModelBase):
             rho: nodal (usually filtered) density
             solver: direct, cg or gmres, note that for a complex step, direct
                     must be used
+            weighted: if True, c = <rhs, u>, otherwise, c = <1, u>
 
         Return:
             c: compliance scalar
@@ -1059,21 +1066,38 @@ class LinearPoisson(ModelBase):
             if fail:
                 raise RuntimeError(f"{solver} failed with code {fail}")
 
-        c = rhs.dot(u)
+        if weighted:
+            c = rhs.dot(u)
+        else:
+            c = np.sum(u) / len(u)
         return c, u
 
     @time_this
-    def compliance_grad(self, rho, u):
+    def compliance_grad(self, rho, u, weighted=True):
         """
         Compute the thermal compliance function gradient w.r.t. nodal density
         Inputs:
             rho: nodal (usually filtered) density
             u: solution vector
+            weighted: if True, c = <rhs, u>, otherwise, c = <1, u>
 
         Return:
             grad: gradient with respect to rho
         """
-        grad = -self._compute_K_dv_sens(rho, u, u)
+        # Compute adjoint variable
+        if weighted:
+            psi = u
+        else:
+            # Construct the linear system
+            K = self.compute_jacobian(rho)
+            rhs = np.ones(len(u))
+
+            # Apply Dirichlet boundary conditions
+            K, rhs = self.apply_dirichlet_bcs(K, rhs, enforce_symmetric_K=True)
+
+            psi = spsolve(K, rhs) / len(u)
+
+        grad = -self._compute_K_dv_sens(rho, psi, u)
         return grad
 
     @time_this
@@ -2405,7 +2429,16 @@ class ProblemCreator:
     """
 
     @time_this
-    def __init__(self, nnodes_x, nnodes_y, nnodes_z=None, element_type="quad"):
+    def __init__(
+        self,
+        nnodes_x,
+        nnodes_y,
+        nnodes_z=None,
+        Lx=None,
+        Ly=None,
+        Lz=None,
+        element_type="quad",
+    ):
         """
         Create a 2d problem instance if nnodes_z is None, otherwise create a
         3d problem instance.
@@ -2434,9 +2467,12 @@ class ProblemCreator:
             )
 
         nnodes = nnodes_x * nnodes_y * nnodes_z
-        Lx = (nnodes_x - 1) / (nnodes_y - 1)
-        Ly = 1.0
-        Lz = (nnodes_z - 1) / (nnodes_y - 1)
+        if Lx is None:
+            Lx = (nnodes_x - 1) / (nnodes_y - 1)
+        if Ly is None:
+            Ly = 1.0
+        if Lz is None:
+            Lz = (nnodes_z - 1) / (nnodes_y - 1)
         x = np.linspace(0, Lx, nnodes_x)
         y = np.linspace(0, Ly, nnodes_y)
         z = np.linspace(0, Lz, nnodes_z)
